@@ -1,0 +1,127 @@
+# AI Interview Assistant — Full Stack
+
+## Stack
+- **Frontend**: React + Vite
+- **Backend**: Python + FastAPI
+- **AI**: Groq (llama-3.3-70b-versatile)
+
+## Project Structure
+```
+ai-interview-app/
+├── backend/
+│   ├── main.py          ← FastAPI server
+│   ├── requirements.txt ← Python dependencies
+│   └── .env             ← Your Groq API key
+└── frontend/
+    ├── src/
+    │   ├── App.jsx      ← React app
+    │   └── main.jsx     ← Entry point
+    ├── index.html
+    ├── package.json
+    └── vite.config.js
+```
+
+---
+
+## Setup — Backend (Python)
+
+### Step 1 — Open terminal and go to backend folder
+```bash
+cd backend
+```
+
+### Step 2 — Create a virtual environment
+```bash
+python -m venv venv
+```
+
+### Step 3 — Activate virtual environment
+**Windows:**
+```bash
+venv\Scripts\activate
+```
+**Mac/Linux:**
+```bash
+source venv/bin/activate
+```
+
+### Step 4 — Install dependencies
+```bash
+pip install -r requirements.txt
+```
+
+### Step 5 — Add your Groq API key
+Open `.env` and replace the placeholder:
+```
+GROQ_API_KEY=gsk_YourActualKeyHere
+```
+
+### Step 6 — Start the backend server
+```bash
+uvicorn main:app --reload
+```
+
+Backend runs at: http://localhost:8000
+API docs at: http://localhost:8000/docs
+
+---
+
+## Setup — Frontend (React)
+
+### Step 1 — Open a NEW terminal and go to frontend folder
+```bash
+cd frontend
+```
+
+### Step 2 — Install dependencies
+```bash
+npm install
+```
+
+### Step 3 — Start the frontend
+```bash
+npm run dev
+```
+
+Frontend runs at: http://localhost:5173
+
+---
+
+## Running Both Together
+
+You need TWO terminal windows open at the same time:
+
+| Terminal 1 (Backend) | Terminal 2 (Frontend) |
+|---|---|
+| `cd backend` | `cd frontend` |
+| `venv\Scripts\activate` | `npm install` |
+| `uvicorn main:app --reload` | `npm run dev` |
+
+Then open http://localhost:5173 in Chrome.
+
+---
+
+## API Endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | `/` | Health check |
+| GET | `/health` | Server status |
+| GET | `/rag-kb` | Get knowledge base |
+| POST | `/generate-questions` | Generate interview questions |
+| POST | `/evaluate-answer` | Score answer with 5 metrics |
+| POST | `/generate-report` | Full recruiter report |
+| POST | `/analyze-code` | AI code review |
+| POST | `/run-code` | Simulate code execution |
+| POST | `/rag-search` | Semantic question search |
+| POST | `/ask-recruiter` | HR AI assistant |
+
+---
+
+## Features
+- Voice interview with speech-to-text
+- Weighted evaluation (5 metrics)
+- Anti-cheat proctoring (webcam + tab detection)
+- RAG knowledge base with semantic search
+- Coding interview with AI analysis
+- Recruiter dashboard

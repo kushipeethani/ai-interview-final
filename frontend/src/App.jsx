@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 
 // ─── Backend API Base URL ────────────────────────────────────────────────────
-const API = "http://localhost:8000";
+const API = "ai-interview-final-aaki.onrender.com";
 
 // ─── Token helpers ───────────────────────────────────────────────────────────
 const getToken = () => sessionStorage.getItem("token");

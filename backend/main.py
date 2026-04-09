@@ -461,14 +461,23 @@ if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
 from fastapi import UploadFile, File
+import pdfplumber
+import io
 
 @app.post("/parse-resume")
 async def parse_resume(file: UploadFile = File(...)):
     content = await file.read()
 
+    text = ""
+
     try:
-        text = content.decode("utf-8", errors="ignore")
-    except:
-        text = str(content)
+        with pdfplumber.open(io.BytesIO(content)) as pdf:
+            for page in pdf.pages:
+                text += page.extract_text() or ""
+    except Exception:
+        try:
+            text = content.decode("utf-8", errors="ignore")
+        except Exception:
+            text = ""
 
     return {"text": text}

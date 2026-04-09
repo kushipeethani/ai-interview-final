@@ -8,6 +8,7 @@ import httpx
 import os
 import json
 import re
+from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -77,7 +78,8 @@ USERS_DB = {
 }
 TOKENS_DB = {}  # token -> user_id
 
-INTERVIEWS_DB = [
+INTERVIEWS_DB_FILE = Path(__file__).with_name("interviews_db.json")
+DEFAULT_INTERVIEWS = [
     {"id":"i1","user_id":"u2","name":"Demo Candidate","role":"Software Engineer","date":"2024-01-10","score":78,
      "recommendation":"Hire","skills":["React","Python","System Design"],
      "summary":"Strong frontend knowledge. Needs improvement in distributed systems.",
@@ -89,6 +91,24 @@ INTERVIEWS_DB = [
      "strengths":["Deep Python knowledge","Excellent problem solving"],"improvements":["Leadership examples sparse"],
      "scores":{"technical_knowledge":9,"problem_solving":9,"communication_skills":8,"project_understanding":8,"confidence":9}},
 ]
+
+
+def load_interviews():
+    if INTERVIEWS_DB_FILE.exists():
+        try:
+            data = json.loads(INTERVIEWS_DB_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                return data
+        except Exception:
+            pass
+    return DEFAULT_INTERVIEWS.copy()
+
+
+def save_interviews():
+    INTERVIEWS_DB_FILE.write_text(json.dumps(INTERVIEWS_DB, indent=2), encoding="utf-8")
+
+
+INTERVIEWS_DB = load_interviews()
 
 
 def get_current_user(authorization: Optional[str] = Header(default=None)):
@@ -179,6 +199,7 @@ async def save_interview(req: SaveInterviewRequest, authorization: Optional[str]
         "scores": req.scores,
     }
     INTERVIEWS_DB.append(iv)
+    save_interviews()
     return {"id": iv["id"], "ok": True}
 
 @app.get("/interviews/my")

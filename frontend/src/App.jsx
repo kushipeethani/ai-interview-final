@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import { FaceDetector as MediaPipeFaceDetector, FilesetResolver } from "@mediapipe/tasks-vision";
 
 // ─── Backend API Base URL ────────────────────────────────────────────────────
 const API = "https://ai-interview-final-aaki.onrender.com";
@@ -156,16 +157,21 @@ function EvaluationBreakdown({ scores, weighted_total }) {
 }
 
 // ─── Proctoring Panel ─────────────────────────────────────────────────────────
-function ProctoringPanel({ active }) {
+function ProctoringPanel({ active, onStatsChange }) {
   const videoRef = useRef();
   const [status, setStatus] = useState("idle");
   const [alerts, setAlerts] = useState([]);
   const [tabViolations, setTabViolations] = useState(0);
   const [faceStatus, setFaceStatus] = useState("waiting");
+  const [missingCount, setMissingCount] = useState(0);
+  const [multipleCount, setMultipleCount] = useState(0);
   const faceCheckRef = useRef();
   const streamRef = useRef();
   const lastAlertKeyRef = useRef("");
   const detectorRef = useRef(null);
+  const browserDetectorRef = useRef(null);
+  const detectorInitRef = useRef(null);
+  const faceStatusRef = useRef("waiting");
 
   const addAlert = useCallback((msg, type="warn") => {
     setAlerts(a => [{ id:Date.now(), msg, type, time:new Date().toLocaleTimeString() }, ...a].slice(0,10));
@@ -176,6 +182,51 @@ function ProctoringPanel({ active }) {
     lastAlertKeyRef.current = key;
     addAlert(msg, type);
   }, [addAlert]);
+
+  const updateFaceState = useCallback((nextStatus, alertKey, alertMessage, alertType="danger") => {
+    const prevStatus = faceStatusRef.current;
+    faceStatusRef.current = nextStatus;
+    setFaceStatus(nextStatus);
+
+    if (nextStatus === "missing" && prevStatus !== "missing") {
+      setMissingCount(count => count + 1);
+    }
+    if (nextStatus === "multiple" && prevStatus !== "multiple") {
+      setMultipleCount(count => count + 1);
+    }
+    if (alertKey && alertMessage) {
+      addAlertOnce(alertKey, alertMessage, alertType);
+    }
+  }, [addAlertOnce]);
+
+  const initFaceDetector = useCallback(async () => {
+    if (detectorRef.current) return detectorRef.current;
+    if (detectorInitRef.current) return detectorInitRef.current;
+
+    detectorInitRef.current = (async () => {
+      try {
+        const vision = await FilesetResolver.forVisionTasks(
+          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm"
+        );
+        detectorRef.current = await MediaPipeFaceDetector.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath:
+              "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite",
+            delegate: "GPU",
+          },
+          runningMode: "VIDEO",
+          minDetectionConfidence: 0.5,
+        });
+        addAlertOnce("face-ai-ready", "AI face detection enabled", "info");
+        return detectorRef.current;
+      } catch {
+        addAlertOnce("face-ai-fallback", "AI face detection unavailable, using browser fallback", "warn");
+        return null;
+      }
+    })();
+
+    return detectorInitRef.current;
+  }, [addAlertOnce]);
 
   // Tab switch detection
   useEffect(() => {
@@ -194,27 +245,27 @@ function ProctoringPanel({ active }) {
       streamRef.current = stream;
       if (videoRef.current) videoRef.current.srcObject = stream;
       setStatus("ready");
-      setFaceStatus("detected");
+      updateFaceState("detected");
       lastAlertKeyRef.current = "camera-ready";
       addAlert("Webcam active — proctoring started","info");
 
-      if (FaceDetectorCtor && !detectorRef.current) {
-        detectorRef.current = new FaceDetectorCtor({ fastMode: true, maxDetectedFaces: 2 });
+      await initFaceDetector();
+
+      if (FaceDetectorCtor && !browserDetectorRef.current) {
+        browserDetectorRef.current = new FaceDetectorCtor({ fastMode: true, maxDetectedFaces: 2 });
       }
 
       if (track) {
         track.onended = () => {
           setStatus("error");
-          setFaceStatus("missing");
-          addAlertOnce("camera-ended", "Camera turned off or disconnected", "danger");
+          updateFaceState("missing", "camera-ended", "Camera turned off or disconnected");
         };
         track.onmute = () => {
-          setFaceStatus("missing");
-          addAlertOnce("camera-muted", "Camera feed lost", "danger");
+          updateFaceState("missing", "camera-muted", "Camera feed lost");
         };
         track.onunmute = () => {
           setStatus("ready");
-          setFaceStatus("detected");
+          updateFaceState("detected");
           lastAlertKeyRef.current = "camera-ready";
         };
       }
@@ -229,41 +280,56 @@ function ProctoringPanel({ active }) {
 
         if (missingFeed || missingFrames) {
           setStatus("error");
-          setFaceStatus("missing");
-          addAlertOnce("face-missing", "Face not detected or camera feed unavailable", "danger");
+          updateFaceState("missing", "face-missing-feed", "Face not detected or camera feed unavailable");
           return;
         }
 
         if (detectorRef.current) {
           try {
-            const faces = await detectorRef.current.detect(video);
+            const result = detectorRef.current.detectForVideo(video, performance.now());
+            const faces = result?.detections || [];
             if (!faces.length) {
               setStatus("ready");
-              setFaceStatus("missing");
-              addAlertOnce("face-missing", "Face not detected", "danger");
+              updateFaceState("missing", "face-missing", "Face not detected");
               return;
             }
             if (faces.length > 1) {
               setStatus("ready");
-              setFaceStatus("multiple");
-              addAlertOnce("face-multiple", "Multiple faces detected", "danger");
+              updateFaceState("multiple", "face-multiple", "Multiple faces detected");
               return;
             }
           } catch {
-            addAlertOnce("face-detector-error", "Face detector unavailable, using camera fallback", "warn");
+            addAlertOnce("face-detector-error", "AI detector unavailable, checking browser fallback", "warn");
+          }
+        }
+
+        if (!detectorRef.current && browserDetectorRef.current) {
+          try {
+            const faces = await browserDetectorRef.current.detect(video);
+            if (!faces.length) {
+              setStatus("ready");
+              updateFaceState("missing", "face-missing", "Face not detected");
+              return;
+            }
+            if (faces.length > 1) {
+              setStatus("ready");
+              updateFaceState("multiple", "face-multiple", "Multiple faces detected");
+              return;
+            }
+          } catch {
+            addAlertOnce("face-browser-fallback-error", "Browser face detector unavailable, using camera fallback", "warn");
           }
         }
 
         setStatus("ready");
-        setFaceStatus("detected");
+        updateFaceState("detected");
         lastAlertKeyRef.current = "camera-ready";
       }, 4000);
     } catch {
       setStatus("error");
-      setFaceStatus("missing");
-      addAlertOnce("camera-denied", "Camera permission denied", "warn");
+      updateFaceState("missing", "camera-denied", "Camera permission denied", "warn");
     }
-  }, [addAlert, addAlertOnce]);
+  }, [addAlert, addAlertOnce, initFaceDetector, updateFaceState]);
 
   // AUTO-START camera when active becomes true
   useEffect(() => {
@@ -277,6 +343,14 @@ function ProctoringPanel({ active }) {
     clearInterval(faceCheckRef.current);
     streamRef.current?.getTracks().forEach(t => t.stop());
   }, []);
+
+  useEffect(() => {
+    onStatsChange?.({
+      tabSwitches: tabViolations,
+      faceNotDetected: missingCount,
+      multipleFaces: multipleCount,
+    });
+  }, [tabViolations, missingCount, multipleCount, onStatsChange]);
 
   const faceColor = { detected:"#22c55e", missing:"#ef4444", multiple:"#f59e0b", waiting:"#52525b" }[faceStatus];
 
@@ -591,7 +665,7 @@ function CodingInterviewMode() {
 }
 
 // ─── Save Interview Button ────────────────────────────────────────────────────
-function SaveInterviewButton({ report, role }) {
+function SaveInterviewButton({ report, role, proctoring }) {
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -608,6 +682,7 @@ function SaveInterviewButton({ report, role }) {
         strengths: report.strengths || [],
         improvements: report.improvements || [],
         scores: report.metric_scores || {},
+        proctoring: proctoring || {},
       }, true);
       setSaved(true);
     } catch (e) {
@@ -640,6 +715,7 @@ function InterviewPage({ onFinish }) {
   const [error, setError] = useState("");
   const [report, setReport] = useState(null);
   const [showProctor, setShowProctor] = useState(false);
+  const [proctoringStats, setProctoringStats] = useState({ tabSwitches: 0, faceNotDetected: 0, multipleFaces: 0 });
   const recognitionRef = useRef();
   const fileRef = useRef();
 
@@ -766,6 +842,7 @@ function InterviewPage({ onFinish }) {
     setAnswers([]);
     setCurrentQ(0);
     setReport(null);
+    setProctoringStats({ tabSwitches: 0, faceNotDetected: 0, multipleFaces: 0 });
     setTranscript("");
   };
 
@@ -862,7 +939,7 @@ function InterviewPage({ onFinish }) {
               </div>
             </div>
           </div>
-          <ProctoringPanel active={true}/>
+          <ProctoringPanel active={true} onStatsChange={setProctoringStats}/>
         </div>
       </main>
     );
@@ -902,7 +979,7 @@ function InterviewPage({ onFinish }) {
                 {report.improvements?.map((s,i) => <p key={i} style={{ fontSize:12, color:"#a1a1aa", marginBottom:4 }}>· {s}</p>)}
               </div>
             </div>
-            <SaveInterviewButton report={report} role={role}/>
+            <SaveInterviewButton report={report} role={role} proctoring={proctoringStats}/>
             <div style={{ display:"flex", gap:10, marginTop:10 }}>
               <button className="btn btn-primary" style={{ flex:1 }} onClick={resetAll}>Start New Interview</button>
               <button className="btn btn-ghost" onClick={onFinish}>← Home</button>
@@ -1091,6 +1168,21 @@ function RecruiterPage() {
                 {/* Summary */}
                 {selected.summary && (
                   <p style={{ fontSize:13, color:"#a1a1aa", lineHeight:1.7, marginBottom:14 }}>{selected.summary}</p>
+                )}
+
+                {!!selected.proctoring && (
+                  <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:10, marginBottom:14 }}>
+                    {[
+                      ["Tab Switches", selected.proctoring.tabSwitches || 0, "#f59e0b"],
+                      ["Face Not Detected", selected.proctoring.faceNotDetected || 0, "#ef4444"],
+                      ["Multiple Faces", selected.proctoring.multipleFaces || 0, "#8b5cf6"],
+                    ].map(([label, value, color]) => (
+                      <div key={label} style={{ padding:"10px 12px", borderRadius:10, background:"rgba(255,255,255,.03)", border:"1px solid rgba(255,255,255,.07)" }}>
+                        <p style={{ fontSize:18, fontWeight:800, color }}>{value}</p>
+                        <p style={{ fontSize:11, color:"#a1a1aa", marginTop:4 }}>{label}</p>
+                      </div>
+                    ))}
+                  </div>
                 )}
 
                 {/* Strengths & Improvements */}

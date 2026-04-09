@@ -250,6 +250,20 @@ def parse_json(raw: str):
         return json.loads(clean)
 
 
+def is_placeholder_code(code: str) -> bool:
+    if not code or not code.strip():
+        return True
+    lowered = code.lower()
+    if "your solution here" in lowered or "todo" in lowered:
+        return True
+    non_empty = [line.strip() for line in code.splitlines() if line.strip()]
+    if len(non_empty) <= 2:
+        return True
+    if all(line in {"pass", "}", "{", "};"} for line in non_empty):
+        return True
+    return False
+
+
 # ── Request Models ────────────────────────────────────────────────────────────
 class GenerateQuestionsRequest(BaseModel):
     role: str
@@ -268,11 +282,13 @@ class AnalyzeCodeRequest(BaseModel):
     problem_title: str
     code: str
     examples: List[str]
+    language: str = "javascript"
 
 class RunCodeRequest(BaseModel):
     problem_title: str
     code: str
     examples: List[str]
+    language: str = "javascript"
 
 class RAGSearchRequest(BaseModel):
     query: str
@@ -416,7 +432,19 @@ recommendation must be one of: Strong Hire, Hire, Maybe, No Hire"""
 
 @app.post("/analyze-code")
 async def analyze_code(req: AnalyzeCodeRequest):
-    content = f"""Do a code review for this solution.
+    if is_placeholder_code(req.code):
+        return {
+            "time_complexity": "N/A",
+            "space_complexity": "N/A",
+            "correctness": 0,
+            "code_quality": 0,
+            "bugs": ["Starter template submitted without a real solution."],
+            "suggestions": ["Write a real implementation before running analysis."],
+            "overall_score": 0,
+            "verdict": "Needs Work",
+        }
+
+    content = f"""Do a code review for this {req.language} solution.
 
 Problem: {req.problem_title}
 Code:
@@ -436,7 +464,10 @@ verdict must be one of: Optimal, Good, Acceptable, Needs Work"""
 
 @app.post("/run-code")
 async def run_code(req: RunCodeRequest):
-    content = f"""Simulate running this JavaScript code for "{req.problem_title}".
+    if is_placeholder_code(req.code):
+        return {"output": "No runnable solution detected. Please replace the starter template with your implementation."}
+
+    content = f"""Simulate running this {req.language} code for "{req.problem_title}".
 
 Test cases:
 {chr(10).join(req.examples)}
@@ -448,6 +479,7 @@ Show results like:
 Test 1: [0,1] ✓
 Test 2: [1,2] ✓
 
+If the code is incomplete, invalid, or clearly just a template, say so explicitly instead of claiming tests passed.
 Plain text only. Max 5 lines."""
 
     output = await call_groq([{"role": "user", "content": content}], max_tokens=300)

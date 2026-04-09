@@ -558,6 +558,7 @@ function CodingInterviewMode() {
 
   const allProblems = aiProblems.length > 0 ? aiProblems : CODING_PROBLEMS;
   const problem = allProblems[problemIdx] || CODING_PROBLEMS[0];
+  const isLastProblem = problemIdx >= allProblems.length - 1;
 
   const saveProblemState = useCallback((problemData, next = {}) => {
     if (!problemData?.title) return;
@@ -718,6 +719,33 @@ Generate exactly 3 diverse coding interview problems for this candidate. The mix
     }
   };
 
+  const goToNextProblem = () => {
+    if (isLastProblem) return;
+    saveProblemState(problem, { code, output, analysis });
+    setProblemIdx(idx => Math.min(idx + 1, allProblems.length - 1));
+    setSaved(false);
+  };
+
+  const outputLines = output ? output.split("\n") : [];
+  const getOutputLineColor = (line) => {
+    const normalized = line.toLowerCase();
+    if (
+      normalized.includes("fail") ||
+      normalized.includes("failed") ||
+      normalized.includes("error") ||
+      normalized.includes("incorrect") ||
+      normalized.includes("no runnable solution")
+    ) return "#f87171";
+    if (
+      normalized.includes("pass") ||
+      normalized.includes("passed") ||
+      normalized.includes("match") ||
+      normalized.includes("works correctly") ||
+      normalized.includes("✓")
+    ) return "#a3e635";
+    return "#cbd5e1";
+  };
+
   const diffColor = { Easy:"#22c55e", Medium:"#f59e0b", Hard:"#ef4444" };
   const verdictColor = { Optimal:"#22c55e", Good:"#06b6d4", Acceptable:"#f59e0b", "Needs Work":"#ef4444" };
 
@@ -808,14 +836,36 @@ Generate exactly 3 diverse coding interview problems for this candidate. The mix
               <div style={{ width:7, height:7, borderRadius:"50%", background:output?"#22c55e":"#52525b" }}/>
               <span style={{ fontSize:11, color:"#52525b" }}>Console</span>
             </div>
-            {output?<pre style={{ fontSize:12, color:"#a3e635", fontFamily:"monospace", whiteSpace:"pre-wrap" }}>{output}</pre>:<p style={{ fontSize:12, color:"#52525b", fontStyle:"italic" }}>Run code to see output…</p>}
+            {output ? (
+              <pre style={{ fontSize:12, fontFamily:"monospace", whiteSpace:"pre-wrap" }}>
+                {outputLines.map((line, index) => (
+                  <div key={`${index}-${line}`} style={{ color:getOutputLineColor(line) }}>
+                    {line || " "}
+                  </div>
+                ))}
+              </pre>
+            ) : <p style={{ fontSize:12, color:"#52525b", fontStyle:"italic" }}>Run code to see output…</p>}
           </div>
           <div style={{ marginTop:10, padding:"10px 14px", borderRadius:9, background:saved?"rgba(34,197,94,.08)":"rgba(99,102,241,.06)", border:`1px solid ${saved?"rgba(34,197,94,.2)":"rgba(99,102,241,.2)"}`, fontSize:12, color:saved?"#4ade80":"#818cf8" }}>
             <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:10 }}>
-              <span>{isSaving?"⏳ Saving coding round...":saved?"✅ Coding round saved to HR dashboard":"💾 Save coding round to HR dashboard"}</span>
-              <button className="btn btn-primary" style={{ fontSize:11, padding:"7px 12px" }} onClick={saveCodingRound} disabled={isSaving}>
-                {isSaving?<Icons.Spin size={14}/>:"Save Coding"}
-              </button>
+              <span>
+                {isSaving
+                  ? "⏳ Submitting coding round..."
+                  : saved
+                    ? "✅ Coding round submitted to HR dashboard"
+                    : isLastProblem
+                      ? "Final question reached. Submit after reviewing your code."
+                      : `Question ${problemIdx + 1} of ${allProblems.length}. Move to the next coding question when ready.`}
+              </span>
+              {isLastProblem ? (
+                <button className="btn btn-primary" style={{ fontSize:11, padding:"7px 12px" }} onClick={saveCodingRound} disabled={isSaving}>
+                  {isSaving?<Icons.Spin size={14}/>:"Submit Coding Round"}
+                </button>
+              ) : (
+                <button className="btn btn-primary" style={{ fontSize:11, padding:"7px 12px" }} onClick={goToNextProblem}>
+                  Next Question →
+                </button>
+              )}
             </div>
           </div>
         </div>

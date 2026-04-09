@@ -567,7 +567,6 @@ function InterviewPage({ onFinish }) {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
-  const [feedback, setFeedback] = useState(null);
   const [report, setReport] = useState(null);
   const [showProctor, setShowProctor] = useState(false);
   const recognitionRef = useRef();
@@ -649,23 +648,33 @@ function InterviewPage({ onFinish }) {
     stopListening(); setIsLoading(true);
     try {
       const fb = await post("/evaluate-answer", { role, question: questions[currentQ], answer: transcript });
-      setAnswers(p => [...p, { q: questions[currentQ], a: transcript, ...fb }]);
-      setFeedback(fb); setTranscript("");
+      const nextAnswers = [...answers, { q: questions[currentQ], a: transcript, ...fb }];
+      setAnswers(nextAnswers);
+      setTranscript("");
+
+      const next = currentQ + 1;
+      if (next >= questions.length) {
+        await generateReport(nextAnswers);
+        setStep("done");
+      } else {
+        setCurrentQ(next);
+        speakQuestion(questions[next], startListening);
+      }
     } catch {
       const fb = { scores:{ technical_knowledge:6, problem_solving:6, communication_skills:7, project_understanding:5, confidence:7 }, strength:"Recorded", improvement:"Keep practicing", weighted_total:6.3 };
-      setAnswers(p => [...p, { q: questions[currentQ], a: transcript, ...fb }]);
-      setFeedback(fb);
-    } finally { setIsLoading(false); }
-  };
-
-  const nextQuestion = async () => {
-    const next = currentQ + 1; setFeedback(null);
-    if (next >= questions.length) { await generateReport([...answers]); setStep("done"); }
-    else {
+      const nextAnswers = [...answers, { q: questions[currentQ], a: transcript, ...fb }];
+      setAnswers(nextAnswers);
       setTranscript("");
-      setCurrentQ(next);
-      speakQuestion(questions[next], startListening);
-    }
+
+      const next = currentQ + 1;
+      if (next >= questions.length) {
+        await generateReport(nextAnswers);
+        setStep("done");
+      } else {
+        setCurrentQ(next);
+        speakQuestion(questions[next], startListening);
+      }
+    } finally { setIsLoading(false); }
   };
 
   const generateReport = async (allAnswers) => {
@@ -686,7 +695,6 @@ function InterviewPage({ onFinish }) {
     setAnswers([]);
     setCurrentQ(0);
     setReport(null);
-    setFeedback(null);
     setTranscript("");
   };
 
@@ -765,56 +773,23 @@ function InterviewPage({ onFinish }) {
               <p style={{ fontSize:15, color:"#f4f4f5", lineHeight:1.65 }}>{questions[currentQ]}</p>
               <button className="btn btn-ghost" style={{ marginTop:10, fontSize:11 }} onClick={() => speakQuestion(questions[currentQ])}>🔊 Replay</button>
             </div>
-            {!feedback ? (
-              <div className="card" style={{ marginBottom:14 }}>
-                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
-                  <span style={{ fontSize:13, color:"#a1a1aa" }}>Your Answer</span>
+            <div className="card" style={{ marginBottom:14 }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
+                <span style={{ fontSize:13, color:"#a1a1aa" }}>Your Answer</span>
+                <AudioBars active={isListening}/>
+              </div>
+              <textarea className="input" style={{ minHeight:80, resize:"vertical", marginBottom:10 }} placeholder="Speak or type your answer…" value={transcript} onChange={e => setTranscript(e.target.value)}/>
+              <div style={{ display:"flex", gap:10 }}>
+                <div style={{ flex:1, display:"flex", alignItems:"center", gap:8, padding:"9px 14px", borderRadius:9, background:isListening?"rgba(99,102,241,.1)":"rgba(255,255,255,.03)", border:isListening?"1px solid rgba(99,102,241,.35)":"1px solid rgba(255,255,255,.07)" }}>
+                  <Icons.Mic size={15}/>
+                  <span style={{ fontSize:12, color:isListening?"#818cf8":"#52525b" }}>{isListening?"🔴 Mic ON — speak now":"Mic initializing..."}</span>
                   <AudioBars active={isListening}/>
                 </div>
-                <textarea className="input" style={{ minHeight:80, resize:"vertical", marginBottom:10 }} placeholder="Speak or type your answer…" value={transcript} onChange={e => setTranscript(e.target.value)}/>
-                <div style={{ display:"flex", gap:10 }}>
-                  <div style={{ flex:1, display:"flex", alignItems:"center", gap:8, padding:"9px 14px", borderRadius:9, background:isListening?"rgba(99,102,241,.1)":"rgba(255,255,255,.03)", border:isListening?"1px solid rgba(99,102,241,.35)":"1px solid rgba(255,255,255,.07)" }}>
-                    <Icons.Mic size={15}/>
-                    <span style={{ fontSize:12, color:isListening?"#818cf8":"#52525b" }}>{isListening?"🔴 Mic ON — speak now":"Mic initializing..."}</span>
-                    <AudioBars active={isListening}/>
-                  </div>
-                  <button className="btn btn-ghost" onClick={submitAnswer} disabled={isLoading||!transcript.trim()} style={{ flex:1 }}>
-                    {isLoading?<><Icons.Spin/>Evaluating…</>:"Submit →"}
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="card" style={{ border:"1px solid rgba(34,197,94,.2)", marginBottom:14 }}>
-                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
-                  <span style={{ fontSize:13, fontWeight:700, color:"#86efac" }}>Evaluation</span>
-                  <span style={{ fontSize:20, fontWeight:800, color:"#6366f1" }}>{feedback.weighted_total}<span style={{ fontSize:11, color:"#52525b" }}>/10</span></span>
-                </div>
-                <div style={{ display:"flex", flexDirection:"column", gap:7, marginBottom:12 }}>
-                  {EVAL_METRICS.map(m => (
-                    <div key={m.key} style={{ display:"flex", alignItems:"center", gap:8 }}>
-                      <span style={{ fontSize:11, color:"#52525b", width:130, flexShrink:0 }}>{m.label}</span>
-                      <div style={{ flex:1, height:5, background:"rgba(255,255,255,.07)", borderRadius:3, overflow:"hidden" }}>
-                        <div style={{ height:"100%", width:`${(feedback.scores[m.key]||0)*10}%`, background:m.color, borderRadius:3, transition:"width .8s ease" }}/>
-                      </div>
-                      <span style={{ fontSize:11, color:m.color, width:25, textAlign:"right" }}>{feedback.scores[m.key]}</span>
-                    </div>
-                  ))}
-                </div>
-                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:12 }}>
-                  <div style={{ padding:"9px 12px", borderRadius:8, background:"rgba(34,197,94,.06)", border:"1px solid rgba(34,197,94,.15)" }}>
-                    <p style={{ fontSize:11, color:"#4ade80", fontWeight:600, marginBottom:4 }}>✓ Strength</p>
-                    <p style={{ fontSize:12, color:"#f4f4f5" }}>{feedback.strength}</p>
-                  </div>
-                  <div style={{ padding:"9px 12px", borderRadius:8, background:"rgba(245,158,11,.06)", border:"1px solid rgba(245,158,11,.15)" }}>
-                    <p style={{ fontSize:11, color:"#fcd34d", fontWeight:600, marginBottom:4 }}>↑ Improve</p>
-                    <p style={{ fontSize:12, color:"#f4f4f5" }}>{feedback.improvement}</p>
-                  </div>
-                </div>
-                <button className="btn btn-primary" style={{ width:"100%" }} onClick={nextQuestion}>
-                  {currentQ+1>=questions.length?"See Full Report →":`Next (${currentQ+2}/${questions.length}) →`}
+                <button className="btn btn-ghost" onClick={submitAnswer} disabled={isLoading||!transcript.trim()} style={{ flex:1 }}>
+                  {isLoading?<><Icons.Spin/>Saving answer…</>:<>{currentQ+1>=questions.length?"Finish Interview":"Next Question"} →</>}
                 </button>
               </div>
-            )}
+            </div>
           </div>
           <ProctoringPanel active={true}/>
         </div>

@@ -665,7 +665,7 @@ function CodingInterviewMode() {
 }
 
 // ─── Save Interview Button ────────────────────────────────────────────────────
-function SaveInterviewButton({ report, role, proctoring }) {
+function SaveInterviewButton({ report, role, proctoring, qa }) {
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -683,6 +683,7 @@ function SaveInterviewButton({ report, role, proctoring }) {
         improvements: report.improvements || [],
         scores: report.metric_scores || {},
         proctoring: proctoring || {},
+        qa: qa || [],
       }, true);
       setSaved(true);
     } catch (e) {
@@ -979,7 +980,7 @@ function InterviewPage({ onFinish }) {
                 {report.improvements?.map((s,i) => <p key={i} style={{ fontSize:12, color:"#a1a1aa", marginBottom:4 }}>· {s}</p>)}
               </div>
             </div>
-            <SaveInterviewButton report={report} role={role} proctoring={proctoringStats}/>
+            <SaveInterviewButton report={report} role={role} proctoring={proctoringStats} qa={answers}/>
             <div style={{ display:"flex", gap:10, marginTop:10 }}>
               <button className="btn btn-primary" style={{ flex:1 }} onClick={resetAll}>Start New Interview</button>
               <button className="btn btn-ghost" onClick={onFinish}>← Home</button>
@@ -1170,18 +1171,35 @@ function RecruiterPage() {
                   <p style={{ fontSize:13, color:"#a1a1aa", lineHeight:1.7, marginBottom:14 }}>{selected.summary}</p>
                 )}
 
-                {!!selected.proctoring && (
-                  <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:10, marginBottom:14 }}>
+                {(selected.proctoring || selected.qa?.length > 0) && (
+                  <div style={{ display:"grid", gridTemplateColumns:"1.2fr .8fr", gap:12, marginBottom:14, alignItems:"start" }}>
+                    <div style={{ padding:"12px", borderRadius:10, background:"rgba(255,255,255,.03)", border:"1px solid rgba(255,255,255,.07)" }}>
+                      <p style={{ fontSize:11, fontWeight:700, color:"#a1a1aa", marginBottom:10 }}>QUESTIONS & ANSWERS</p>
+                      {selected.qa?.length > 0 ? (
+                        <div style={{ maxHeight:260, overflowY:"auto", display:"flex", flexDirection:"column", gap:10 }}>
+                          {selected.qa.map((item, index) => (
+                            <div key={index} style={{ paddingBottom:10, borderBottom:"1px solid rgba(255,255,255,.06)" }}>
+                              <p style={{ fontSize:11, color:"#818cf8", fontWeight:700, marginBottom:5 }}>Q{index + 1}. {item.q}</p>
+                              <p style={{ fontSize:12, color:"#a1a1aa", lineHeight:1.6 }}>{item.a || "No answer recorded"}</p>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p style={{ fontSize:12, color:"#52525b" }}>No questions saved for this interview.</p>
+                      )}
+                    </div>
+                    <div style={{ display:"grid", gridTemplateColumns:"1fr", gap:10 }}>
                     {[
-                      ["Tab Switches", selected.proctoring.tabSwitches || 0, "#f59e0b"],
-                      ["Face Not Detected", selected.proctoring.faceNotDetected || 0, "#ef4444"],
-                      ["Multiple Faces", selected.proctoring.multipleFaces || 0, "#8b5cf6"],
+                      ["Tab Switches", selected.proctoring?.tabSwitches || 0, "#f59e0b"],
+                      ["Face Not Detected", selected.proctoring?.faceNotDetected || 0, "#ef4444"],
+                      ["Multiple Faces", selected.proctoring?.multipleFaces || 0, "#8b5cf6"],
                     ].map(([label, value, color]) => (
                       <div key={label} style={{ padding:"10px 12px", borderRadius:10, background:"rgba(255,255,255,.03)", border:"1px solid rgba(255,255,255,.07)" }}>
                         <p style={{ fontSize:18, fontWeight:800, color }}>{value}</p>
                         <p style={{ fontSize:11, color:"#a1a1aa", marginTop:4 }}>{label}</p>
                       </div>
                     ))}
+                    </div>
                   </div>
                 )}
 

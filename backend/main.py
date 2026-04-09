@@ -180,6 +180,7 @@ class SaveInterviewRequest(BaseModel):
     improvements: List[str] = []
     scores: dict = {}
     proctoring: dict = {}
+    qa: List[dict] = []
 
 @app.post("/interviews/save")
 async def save_interview(req: SaveInterviewRequest, authorization: Optional[str] = Header(default=None)):
@@ -199,6 +200,7 @@ async def save_interview(req: SaveInterviewRequest, authorization: Optional[str]
         "improvements": req.improvements,
         "scores": req.scores,
         "proctoring": req.proctoring,
+        "qa": req.qa,
     }
     INTERVIEWS_DB.append(iv)
     save_interviews()

@@ -588,13 +588,16 @@ function InterviewPage({ onFinish }) {
     }
   };
 
-  const speakQuestion = (text) => {
+  const speakQuestion = (text, onDone) => {
     if (!window.speechSynthesis) return;
     window.speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
     u.rate = 0.92;
     u.onstart = () => setIsSpeaking(true);
-    u.onend = () => setIsSpeaking(false);
+    u.onend = () => {
+      setIsSpeaking(false);
+      onDone?.();
+    };
     window.speechSynthesis.speak(u);
   };
 
@@ -635,11 +638,7 @@ function InterviewPage({ onFinish }) {
       const data = await post("/generate-questions", { role, resume_text: resumeText });
       setQuestions(data.questions);
       setStep("interview");
-      // Auto-start mic and webcam when interview begins
-      setTimeout(() => {
-        startListening();
-      }, 1000); // slight delay so question is spoken first
-      speakQuestion(data.questions[0]);
+      speakQuestion(data.questions[0], startListening);
     } catch (e) {
       setError("Error: " + e.message);
     } finally { setIsLoading(false); }
@@ -662,7 +661,11 @@ function InterviewPage({ onFinish }) {
   const nextQuestion = async () => {
     const next = currentQ + 1; setFeedback(null);
     if (next >= questions.length) { await generateReport([...answers]); setStep("done"); }
-    else { setCurrentQ(next); speakQuestion(questions[next]); }
+    else {
+      setTranscript("");
+      setCurrentQ(next);
+      speakQuestion(questions[next], startListening);
+    }
   };
 
   const generateReport = async (allAnswers) => {
@@ -675,7 +678,24 @@ function InterviewPage({ onFinish }) {
     } finally { setIsLoading(false); }
   };
 
-  const resetAll = () => { setStep("setup"); setQuestions([]); setAnswers([]); setCurrentQ(0); setReport(null); setFeedback(null); setTranscript(""); };
+  const resetAll = () => {
+    stopListening();
+    window.speechSynthesis?.cancel();
+    setStep("setup");
+    setQuestions([]);
+    setAnswers([]);
+    setCurrentQ(0);
+    setReport(null);
+    setFeedback(null);
+    setTranscript("");
+  };
+
+  useEffect(() => {
+    return () => {
+      stopListening();
+      window.speechSynthesis?.cancel();
+    };
+  }, []);
 
   if (step === "setup") return (
     <main style={{ maxWidth:900, margin:"0 auto", padding:"40px 20px 80px" }}>

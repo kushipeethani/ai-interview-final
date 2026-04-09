@@ -164,10 +164,18 @@ function ProctoringPanel({ active }) {
   const [faceStatus, setFaceStatus] = useState("waiting");
   const faceCheckRef = useRef();
   const streamRef = useRef();
+  const lastAlertKeyRef = useRef("");
+  const detectorRef = useRef(null);
 
   const addAlert = useCallback((msg, type="warn") => {
     setAlerts(a => [{ id:Date.now(), msg, type, time:new Date().toLocaleTimeString() }, ...a].slice(0,10));
   }, []);
+
+  const addAlertOnce = useCallback((key, msg, type="warn") => {
+    if (lastAlertKeyRef.current === key) return;
+    lastAlertKeyRef.current = key;
+    addAlert(msg, type);
+  }, [addAlert]);
 
   // Tab switch detection
   useEffect(() => {
@@ -181,18 +189,81 @@ function ProctoringPanel({ active }) {
     setStatus("loading");
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video:true, audio:false });
+      const track = stream.getVideoTracks()[0];
+      const FaceDetectorCtor = window.FaceDetector;
       streamRef.current = stream;
       if (videoRef.current) videoRef.current.srcObject = stream;
-      setStatus("ready"); setFaceStatus("detected");
+      setStatus("ready");
+      setFaceStatus("detected");
+      lastAlertKeyRef.current = "camera-ready";
       addAlert("Webcam active — proctoring started","info");
-      faceCheckRef.current = setInterval(() => {
-        const r = Math.random();
-        if (r < 0.05) { setFaceStatus("missing"); addAlert("⚠ Face not detected!","danger"); }
-        else if (r < 0.08) { setFaceStatus("multiple"); addAlert("⚠ Multiple faces!","danger"); }
-        else setFaceStatus("detected");
+
+      if (FaceDetectorCtor && !detectorRef.current) {
+        detectorRef.current = new FaceDetectorCtor({ fastMode: true, maxDetectedFaces: 2 });
+      }
+
+      if (track) {
+        track.onended = () => {
+          setStatus("error");
+          setFaceStatus("missing");
+          addAlertOnce("camera-ended", "Camera turned off or disconnected", "danger");
+        };
+        track.onmute = () => {
+          setFaceStatus("missing");
+          addAlertOnce("camera-muted", "Camera feed lost", "danger");
+        };
+        track.onunmute = () => {
+          setStatus("ready");
+          setFaceStatus("detected");
+          lastAlertKeyRef.current = "camera-ready";
+        };
+      }
+
+      clearInterval(faceCheckRef.current);
+      faceCheckRef.current = setInterval(async () => {
+        const currentStream = streamRef.current;
+        const currentTrack = currentStream?.getVideoTracks?.()[0];
+        const video = videoRef.current;
+        const missingFeed = !currentTrack || currentTrack.readyState !== "live" || currentTrack.muted || !currentTrack.enabled;
+        const missingFrames = !video || video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0 || video.paused || video.ended;
+
+        if (missingFeed || missingFrames) {
+          setStatus("error");
+          setFaceStatus("missing");
+          addAlertOnce("face-missing", "Face not detected or camera feed unavailable", "danger");
+          return;
+        }
+
+        if (detectorRef.current) {
+          try {
+            const faces = await detectorRef.current.detect(video);
+            if (!faces.length) {
+              setStatus("ready");
+              setFaceStatus("missing");
+              addAlertOnce("face-missing", "Face not detected", "danger");
+              return;
+            }
+            if (faces.length > 1) {
+              setStatus("ready");
+              setFaceStatus("multiple");
+              addAlertOnce("face-multiple", "Multiple faces detected", "danger");
+              return;
+            }
+          } catch {
+            addAlertOnce("face-detector-error", "Face detector unavailable, using camera fallback", "warn");
+          }
+        }
+
+        setStatus("ready");
+        setFaceStatus("detected");
+        lastAlertKeyRef.current = "camera-ready";
       }, 4000);
-    } catch { setStatus("error"); addAlert("Camera permission denied","warn"); }
-  }, [addAlert]);
+    } catch {
+      setStatus("error");
+      setFaceStatus("missing");
+      addAlertOnce("camera-denied", "Camera permission denied", "warn");
+    }
+  }, [addAlert, addAlertOnce]);
 
   // AUTO-START camera when active becomes true
   useEffect(() => {
@@ -223,14 +294,14 @@ function ProctoringPanel({ active }) {
         {status !== "ready" && (
           <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:10, color:"#52525b" }}>
             {status==="loading"?<Icons.Spin size={28}/>:<Icons.Camera/>}
-            <p style={{ fontSize:12 }}>{status==="error"?"Camera permission denied — check browser settings":status==="loading"?"Starting camera...":"Waiting..."}</p>
+            <p style={{ fontSize:12 }}>{status==="error"?"Camera unavailable or turned off":status==="loading"?"Starting camera...":"Waiting..."}</p>
           </div>
         )}
         {status === "ready" && (
           <>
             <div style={{ position:"absolute", left:0, right:0, height:2, background:"linear-gradient(90deg,transparent,#6366f1,transparent)", opacity:.5, animation:"scanline 3s linear infinite", top:0 }}/>
             <div style={{ position:"absolute", bottom:8, left:8, padding:"3px 8px", borderRadius:6, background:"rgba(0,0,0,.7)", fontSize:11, color:faceColor }}>
-              ● {faceStatus==="detected"?"Face OK":faceStatus==="missing"?"No face":"Multiple faces"}
+              ● {faceStatus==="detected"?"Face OK":faceStatus==="multiple"?"Multiple faces":"No face"}
             </div>
             <div style={{ position:"absolute", top:8, right:8, padding:"2px 7px", borderRadius:5, background:"rgba(239,68,68,.8)", fontSize:10, color:"#fff", fontWeight:600 }}>● REC</div>
           </>

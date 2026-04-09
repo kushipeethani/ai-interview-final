@@ -460,3 +460,15 @@ Answer professionally in 2-3 sentences."""
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+from fastapi import UploadFile, File
+
+@app.post("/parse-resume")
+async def parse_resume(file: UploadFile = File(...)):
+    content = await file.read()
+
+    try:
+        text = content.decode("utf-8", errors="ignore")
+    except:
+        text = str(content)
+
+    return {"text": text}

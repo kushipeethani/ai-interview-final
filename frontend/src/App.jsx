@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 
 // ─── Backend API Base URL ────────────────────────────────────────────────────
-const API = "https://ai-interview-final-aaki.onrender.com";
+const API = "http://localhost:8000";
+
 // ─── Token helpers ───────────────────────────────────────────────────────────
 const getToken = () => sessionStorage.getItem("token");
 const getUser  = () => { try { return JSON.parse(sessionStorage.getItem("user")||"null"); } catch { return null; } };
@@ -573,11 +574,19 @@ function InterviewPage({ onFinish }) {
   const recognitionRef = useRef();
   const fileRef = useRef();
 
-  const handleFile = e => {
+  const handleFile = async e => {
     const f = e.target.files[0]; if (!f) return;
-    const r = new FileReader();
-    r.onload = ev => setResumeText(ev.target.result.slice(0, 3000));
-    r.readAsText(f);
+    setError("");
+    try {
+      const formData = new FormData();
+      formData.append("file", f);
+      const res = await fetch(`${API}/parse-resume`, { method:"POST", body:formData });
+      if (!res.ok) { const err = await res.json(); throw new Error(err.detail || "Upload failed"); }
+      const data = await res.json();
+      setResumeText(data.text.slice(0, 4000));
+    } catch (err) {
+      setError("Resume upload failed: " + err.message);
+    }
   };
 
   const speakQuestion = (text) => {

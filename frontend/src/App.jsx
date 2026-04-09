@@ -157,7 +157,7 @@ function EvaluationBreakdown({ scores, weighted_total }) {
 }
 
 // ─── Proctoring Panel ─────────────────────────────────────────────────────────
-function ProctoringPanel({ active, onStatsChange }) {
+function ProctoringPanel({ active, onStatsChange, enableVoiceDetection = false }) {
   const videoRef = useRef();
   const [status, setStatus] = useState("idle");
   const [alerts, setAlerts] = useState([]);
@@ -165,6 +165,7 @@ function ProctoringPanel({ active, onStatsChange }) {
   const [faceStatus, setFaceStatus] = useState("waiting");
   const [missingCount, setMissingCount] = useState(0);
   const [multipleCount, setMultipleCount] = useState(0);
+  const [voiceDetections, setVoiceDetections] = useState(0);
   const faceCheckRef = useRef();
   const streamRef = useRef();
   const lastAlertKeyRef = useRef("");
@@ -172,6 +173,10 @@ function ProctoringPanel({ active, onStatsChange }) {
   const browserDetectorRef = useRef(null);
   const detectorInitRef = useRef(null);
   const faceStatusRef = useRef("waiting");
+  const audioContextRef = useRef(null);
+  const analyserRef = useRef(null);
+  const audioDataRef = useRef(null);
+  const voiceDetectedRef = useRef(false);
 
   const addAlert = useCallback((msg, type="warn") => {
     setAlerts(a => [{ id:Date.now(), msg, type, time:new Date().toLocaleTimeString() }, ...a].slice(0,10));
@@ -239,7 +244,7 @@ function ProctoringPanel({ active, onStatsChange }) {
   const startCamera = useCallback(async () => {
     setStatus("loading");
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video:true, audio:false });
+      const stream = await navigator.mediaDevices.getUserMedia({ video:true, audio:enableVoiceDetection });
       const track = stream.getVideoTracks()[0];
       const FaceDetectorCtor = window.FaceDetector;
       streamRef.current = stream;
@@ -253,6 +258,25 @@ function ProctoringPanel({ active, onStatsChange }) {
 
       if (FaceDetectorCtor && !browserDetectorRef.current) {
         browserDetectorRef.current = new FaceDetectorCtor({ fastMode: true, maxDetectedFaces: 2 });
+      }
+
+      if (enableVoiceDetection) {
+        const audioTracks = stream.getAudioTracks();
+        if (audioTracks.length) {
+          const AudioCtx = window.AudioContext || window.webkitAudioContext;
+          if (AudioCtx && !audioContextRef.current) {
+            const audioContext = new AudioCtx();
+            const analyser = audioContext.createAnalyser();
+            analyser.fftSize = 1024;
+            const source = audioContext.createMediaStreamSource(new MediaStream(audioTracks));
+            source.connect(analyser);
+            audioContextRef.current = audioContext;
+            analyserRef.current = analyser;
+            audioDataRef.current = new Uint8Array(analyser.frequencyBinCount);
+          }
+        } else {
+          addAlertOnce("voice-mic-missing", "Microphone unavailable for ambient voice detection", "warn");
+        }
       }
 
       if (track) {
@@ -277,6 +301,8 @@ function ProctoringPanel({ active, onStatsChange }) {
         const video = videoRef.current;
         const missingFeed = !currentTrack || currentTrack.readyState !== "live" || currentTrack.muted || !currentTrack.enabled;
         const missingFrames = !video || video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0 || video.paused || video.ended;
+        const analyser = analyserRef.current;
+        const audioData = audioDataRef.current;
 
         if (missingFeed || missingFrames) {
           setStatus("error");
@@ -321,6 +347,20 @@ function ProctoringPanel({ active, onStatsChange }) {
           }
         }
 
+        if (enableVoiceDetection && analyser && audioData) {
+          analyser.getByteFrequencyData(audioData);
+          const avgVolume = audioData.reduce((sum, value) => sum + value, 0) / audioData.length;
+          const voiceDetected = avgVolume > 22;
+
+          if (voiceDetected && !voiceDetectedRef.current) {
+            voiceDetectedRef.current = true;
+            setVoiceDetections(count => count + 1);
+            addAlertOnce(`voice-${Date.now()}`, "Ambient voice detected near candidate", "danger");
+          } else if (!voiceDetected) {
+            voiceDetectedRef.current = false;
+          }
+        }
+
         setStatus("ready");
         updateFaceState("detected");
         lastAlertKeyRef.current = "camera-ready";
@@ -329,7 +369,7 @@ function ProctoringPanel({ active, onStatsChange }) {
       setStatus("error");
       updateFaceState("missing", "camera-denied", "Camera permission denied", "warn");
     }
-  }, [addAlert, addAlertOnce, initFaceDetector, updateFaceState]);
+  }, [addAlert, addAlertOnce, enableVoiceDetection, initFaceDetector, updateFaceState]);
 
   // AUTO-START camera when active becomes true
   useEffect(() => {
@@ -342,6 +382,7 @@ function ProctoringPanel({ active, onStatsChange }) {
   useEffect(() => () => {
     clearInterval(faceCheckRef.current);
     streamRef.current?.getTracks().forEach(t => t.stop());
+    audioContextRef.current?.close?.();
   }, []);
 
   useEffect(() => {
@@ -349,8 +390,9 @@ function ProctoringPanel({ active, onStatsChange }) {
       tabSwitches: tabViolations,
       faceNotDetected: missingCount,
       multipleFaces: multipleCount,
+      voiceDetections,
     });
-  }, [tabViolations, missingCount, multipleCount, onStatsChange]);
+  }, [tabViolations, missingCount, multipleCount, voiceDetections, onStatsChange]);
 
   const faceColor = { detected:"#22c55e", missing:"#ef4444", multiple:"#f59e0b", waiting:"#52525b" }[faceStatus];
 
@@ -381,8 +423,13 @@ function ProctoringPanel({ active, onStatsChange }) {
           </>
         )}
       </div>
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:8, marginBottom:14 }}>
-        {[["Switches",tabViolations,tabViolations>0],["Face",faceStatus==="detected"?"OK":"!",faceStatus!=="detected"],["Camera",status==="ready"?"On":"Off",status!=="ready"]].map(([l,v,bad]) => (
+      <div style={{ display:"grid", gridTemplateColumns:`repeat(${enableVoiceDetection ? 4 : 3},1fr)`, gap:8, marginBottom:14 }}>
+        {[
+          ["Switches",tabViolations,tabViolations>0],
+          ["Face",faceStatus==="detected"?"OK":"!",faceStatus!=="detected"],
+          ["Camera",status==="ready"?"On":"Off",status!=="ready"],
+          ...(enableVoiceDetection ? [["Voice",voiceDetections,voiceDetections>0]] : []),
+        ].map(([l,v,bad]) => (
           <div key={l} style={{ padding:"8px", borderRadius:8, background:"rgba(255,255,255,.03)", border:`1px solid ${bad?"rgba(239,68,68,.25)":"rgba(255,255,255,.07)"}`, textAlign:"center" }}>
             <p style={{ fontSize:15, fontWeight:700, color:bad?"#ef4444":"#22c55e" }}>{v}</p>
             <p style={{ fontSize:10, color:"#52525b" }}>{l}</p>
@@ -490,6 +537,7 @@ const LANGUAGES = {
 
 // ─── Coding Interview Mode ────────────────────────────────────────────────────
 function CodingInterviewMode() {
+  const currentUser = getUser();
   const [problemIdx, setProblemIdx] = useState(0);
   const [language, setLanguage] = useState("javascript");
   const [code, setCode] = useState(CODING_PROBLEMS[0].starterCode);
@@ -498,22 +546,50 @@ function CodingInterviewMode() {
   const [isRunning, setIsRunning] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
   const [tab, setTab] = useState("problem");
   const [resumeText, setResumeText] = useState("");
   const [aiProblems, setAiProblems] = useState([]);
+  const [codingRecords, setCodingRecords] = useState({});
+  const [codingProctoring, setCodingProctoring] = useState({ tabSwitches: 0, faceNotDetected: 0, multipleFaces: 0, voiceDetections: 0 });
   const fileRef = useRef();
+  const sessionSeedRef = useRef(Date.now());
 
   const allProblems = aiProblems.length > 0 ? aiProblems : CODING_PROBLEMS;
   const problem = allProblems[problemIdx] || CODING_PROBLEMS[0];
+
+  const saveProblemState = useCallback((problemData, next = {}) => {
+    if (!problemData?.title) return;
+    setCodingRecords(prev => ({
+      ...prev,
+      [problemData.title]: {
+        title: problemData.title,
+        difficulty: problemData.difficulty,
+        tags: problemData.tags || [],
+        description: problemData.description,
+        examples: problemData.examples || [],
+        language,
+        code,
+        output,
+        analysis,
+        ...prev[problemData.title],
+        ...next,
+      },
+    }));
+  }, [analysis, code, language, output]);
 
   // When language or problem changes, update starter code
   useEffect(() => {
     const fnName = problem.title.replace(/\s+/g,"").replace(/[^a-zA-Z0-9]/g,"");
     const langCfg = LANGUAGES[language];
     const starter = langCfg.starter(fnName.charAt(0).toLowerCase()+fnName.slice(1));
-    setCode(starter);
-    setOutput(""); setAnalysis(null); setTab("problem");
-  }, [problemIdx, language]);
+    const existing = codingRecords[problem.title];
+    setCode(existing?.code || starter);
+    setOutput(existing?.output || "");
+    setAnalysis(existing?.analysis || null);
+    setTab("problem");
+  }, [problemIdx, language, problem.title, codingRecords]);
 
   // Upload resume for AI problem generation
   const handleResumeUpload = async e => {
@@ -532,25 +608,42 @@ function CodingInterviewMode() {
     setIsGenerating(true);
     try {
       const prompt = resumeText
-        ? `Based on this resume, generate 4 coding interview problems suited for the candidate's background:\n${resumeText.slice(0,1500)}`
-        : "Generate 4 diverse coding interview problems covering arrays, strings, dynamic programming, and system design.";
+        ? `Candidate: ${currentUser?.name || "Unknown Candidate"}.
+Create a fresh coding round seed ${sessionSeedRef.current}.
+Based on this resume, generate exactly 3 coding interview problems suited for the candidate's background. The mix must be 2 Easy and 1 Medium. Avoid repeating common stock sets:\n${resumeText.slice(0,1500)}`
+        : `Candidate: ${currentUser?.name || "Unknown Candidate"}.
+Create a fresh coding round seed ${sessionSeedRef.current}.
+Generate exactly 3 diverse coding interview problems for this candidate. The mix must be 2 Easy and 1 Medium. Make them feel fresh and not identical to standard canned sets.`;
       const data = await post("/generate-coding-problems", { prompt, language });
       if (data.problems && data.problems.length > 0) {
         setAiProblems(data.problems);
         setProblemIdx(0);
+        setCodingRecords({});
+        setSaved(false);
       }
     } catch {
-      // fallback: shuffle existing problems
-      setAiProblems([...CODING_PROBLEMS].sort(() => Math.random() - 0.5));
+      const fallback = [
+        CODING_PROBLEMS.find(p => p.difficulty === "Easy"),
+        CODING_PROBLEMS.filter(p => p.difficulty === "Easy")[1],
+        CODING_PROBLEMS.find(p => p.difficulty === "Medium"),
+      ].filter(Boolean);
+      setAiProblems(fallback);
       setProblemIdx(0);
+      setCodingRecords({});
+      setSaved(false);
     } finally { setIsGenerating(false); }
   };
+
+  useEffect(() => {
+    generateProblems();
+  }, []);
 
   const runCode = async () => {
     setIsRunning(true); setOutput("");
     try {
       const data = await post("/run-code", { problem_title: problem.title, code, examples: problem.examples, language });
       setOutput(data.output);
+      saveProblemState(problem, { code, output: data.output });
     } catch (e) { setOutput("Error: " + e.message); }
     finally { setIsRunning(false); }
   };
@@ -560,10 +653,69 @@ function CodingInterviewMode() {
     try {
       const data = await post("/analyze-code", { problem_title: problem.title, code, examples: problem.examples, language });
       setAnalysis(data); setTab("analysis");
+      saveProblemState(problem, { code, analysis: data });
     } catch {
-      setAnalysis({ time_complexity:"O(?)", space_complexity:"O(?)", correctness:5, code_quality:5, bugs:[], suggestions:["Submit valid code"], overall_score:5, verdict:"Acceptable" });
+      const fallbackAnalysis = { time_complexity:"O(?)", space_complexity:"O(?)", correctness:5, code_quality:5, bugs:[], suggestions:["Submit valid code"], overall_score:5, verdict:"Acceptable" };
+      setAnalysis(fallbackAnalysis);
       setTab("analysis");
+      saveProblemState(problem, { code, analysis: fallbackAnalysis });
     } finally { setIsAnalyzing(false); }
+  };
+
+  const saveCodingRound = async () => {
+    if (isSaving) return;
+    const problems = allProblems.map((p, index) => {
+      const record = codingRecords[p.title] || {};
+      return {
+        order: index + 1,
+        title: p.title,
+        difficulty: p.difficulty,
+        tags: p.tags || [],
+        description: p.description,
+        examples: p.examples || [],
+        language: record.language || language,
+        code: record.code || "",
+        testcase_output: record.output || "",
+        analysis: record.analysis || null,
+      };
+    });
+
+    const completed = problems.filter(p => p.code || p.testcase_output || p.analysis);
+    if (!completed.length) return;
+
+    const overallScores = completed
+      .map(p => p.analysis?.overall_score)
+      .filter(score => typeof score === "number");
+    const avgScore = overallScores.length
+      ? Math.round((overallScores.reduce((sum, score) => sum + score, 0) / overallScores.length) * 10)
+      : 0;
+
+    setIsSaving(true);
+    try {
+      await post("/interviews/save", {
+        role: `Coding Round (${language})`,
+        score: avgScore,
+        recommendation: avgScore >= 80 ? "Hire" : avgScore >= 60 ? "Maybe" : "No Hire",
+        skills: [],
+        summary: `Coding round completed with ${completed.length} worked problem${completed.length === 1 ? "" : "s"} in ${language}.`,
+        strengths: [],
+        improvements: [],
+        scores: {},
+        proctoring: {},
+        qa: [],
+        coding: {
+          language,
+          total_questions: allProblems.length,
+          problems,
+          proctoring: codingProctoring,
+        },
+      }, true);
+      setSaved(true);
+    } catch (e) {
+      console.error("Coding round save failed:", e.message);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const diffColor = { Easy:"#22c55e", Medium:"#f59e0b", Hard:"#ef4444" };
@@ -575,7 +727,7 @@ function CodingInterviewMode() {
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16, flexWrap:"wrap", gap:10 }}>
         <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
           {allProblems.map((p,i) => (
-            <button key={i} onClick={() => setProblemIdx(i)} className="btn btn-ghost"
+            <button key={i} onClick={() => { saveProblemState(problem); setProblemIdx(i); }} className="btn btn-ghost"
               style={{ background:problemIdx===i?"rgba(99,102,241,.15)":undefined, border:problemIdx===i?"1px solid rgba(99,102,241,.35)":undefined, color:problemIdx===i?"#818cf8":"#a1a1aa", fontSize:12 }}>
               {p.title} <span style={{ fontSize:9, padding:"1px 5px", borderRadius:4, background:`${diffColor[p.difficulty]||"#6366f1"}18`, color:diffColor[p.difficulty]||"#818cf8" }}>{p.difficulty||"AI"}</span>
             </button>
@@ -592,7 +744,7 @@ function CodingInterviewMode() {
         </div>
       </div>
 
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1.2fr", gap:16 }}>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1.2fr 280px", gap:16, alignItems:"start" }}>
         <div>
           <div style={{ display:"flex", gap:1, marginBottom:12, background:"rgba(255,255,255,.03)", borderRadius:9, padding:3, border:"1px solid rgba(255,255,255,.07)" }}>
             {["problem","analysis"].map(t => (
@@ -637,7 +789,7 @@ function CodingInterviewMode() {
             {/* Language selector */}
             <div style={{ display:"flex", gap:4 }}>
               {Object.entries(LANGUAGES).map(([key, cfg]) => (
-                <button key={key} onClick={() => setLanguage(key)} className="btn btn-ghost"
+                <button key={key} onClick={() => { saveProblemState(problem); setLanguage(key); setSaved(false); }} className="btn btn-ghost"
                   style={{ padding:"4px 9px", fontSize:11, background:language===key?"rgba(99,102,241,.2)":undefined, color:language===key?"#818cf8":"#52525b", border:language===key?"1px solid rgba(99,102,241,.35)":"1px solid transparent" }}>
                   {cfg.label}
                 </button>
@@ -648,7 +800,7 @@ function CodingInterviewMode() {
               <button className="btn btn-primary" style={{ fontSize:12 }} onClick={analyzeCode} disabled={isAnalyzing}>{isAnalyzing?<><Icons.Spin/>Analyzing…</>:"AI Analyze →"}</button>
             </div>
           </div>
-          <textarea className="code-editor" value={code} onChange={e => setCode(e.target.value)}
+          <textarea className="code-editor" value={code} onChange={e => { setCode(e.target.value); setSaved(false); }}
             onKeyDown={e => { if(e.key==="Tab"){e.preventDefault();const s=e.target.selectionStart;setCode(code.substring(0,s)+"  "+code.substring(s));setTimeout(()=>{e.target.selectionStart=e.target.selectionEnd=s+2},0)} }}
             spellCheck={false}/>
           <div style={{ marginTop:10, borderRadius:9, background:"#050609", border:"1px solid rgba(255,255,255,.07)", padding:"12px 14px", minHeight:70 }}>
@@ -658,7 +810,16 @@ function CodingInterviewMode() {
             </div>
             {output?<pre style={{ fontSize:12, color:"#a3e635", fontFamily:"monospace", whiteSpace:"pre-wrap" }}>{output}</pre>:<p style={{ fontSize:12, color:"#52525b", fontStyle:"italic" }}>Run code to see output…</p>}
           </div>
+          <div style={{ marginTop:10, padding:"10px 14px", borderRadius:9, background:saved?"rgba(34,197,94,.08)":"rgba(99,102,241,.06)", border:`1px solid ${saved?"rgba(34,197,94,.2)":"rgba(99,102,241,.2)"}`, fontSize:12, color:saved?"#4ade80":"#818cf8" }}>
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:10 }}>
+              <span>{isSaving?"⏳ Saving coding round...":saved?"✅ Coding round saved to HR dashboard":"💾 Save coding round to HR dashboard"}</span>
+              <button className="btn btn-primary" style={{ fontSize:11, padding:"7px 12px" }} onClick={saveCodingRound} disabled={isSaving}>
+                {isSaving?<Icons.Spin size={14}/>:"Save Coding"}
+              </button>
+            </div>
+          </div>
         </div>
+        <ProctoringPanel active={true} enableVoiceDetection={true} onStatsChange={setCodingProctoring}/>
       </div>
     </div>
   );
@@ -1199,6 +1360,57 @@ function RecruiterPage() {
                         <p style={{ fontSize:11, color:"#a1a1aa", marginTop:4 }}>{label}</p>
                       </div>
                     ))}
+                    </div>
+                  </div>
+                )}
+
+                {!!selected.coding?.problems?.length && (
+                  <div style={{ marginBottom:14, padding:"12px", borderRadius:10, background:"rgba(255,255,255,.03)", border:"1px solid rgba(255,255,255,.07)" }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
+                      <p style={{ fontSize:11, fontWeight:700, color:"#a1a1aa" }}>CODING</p>
+                      <span className="tag">{selected.coding.language || "coding"}</span>
+                    </div>
+
+                    <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:10, marginBottom:12 }}>
+                      {[
+                        ["Tab Switches", selected.coding.proctoring?.tabSwitches || 0, "#f59e0b"],
+                        ["Face Not Detected", selected.coding.proctoring?.faceNotDetected || 0, "#ef4444"],
+                        ["Multiple Faces", selected.coding.proctoring?.multipleFaces || 0, "#8b5cf6"],
+                        ["Voice Alerts", selected.coding.proctoring?.voiceDetections || 0, "#06b6d4"],
+                      ].map(([label, value, color]) => (
+                        <div key={label} style={{ padding:"10px 12px", borderRadius:10, background:"rgba(255,255,255,.02)", border:"1px solid rgba(255,255,255,.07)" }}>
+                          <p style={{ fontSize:18, fontWeight:800, color }}>{value}</p>
+                          <p style={{ fontSize:11, color:"#a1a1aa", marginTop:4 }}>{label}</p>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+                      {selected.coding.problems.map((item, index) => (
+                        <div key={`${item.title}-${index}`} style={{ padding:"12px", borderRadius:10, background:"rgba(0,0,0,.2)", border:"1px solid rgba(255,255,255,.06)" }}>
+                          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+                            <p style={{ fontSize:13, fontWeight:700 }}>{index + 1}. {item.title}</p>
+                            <span style={{ fontSize:11, color:"#818cf8" }}>{item.difficulty}</span>
+                          </div>
+                          <p style={{ fontSize:12, color:"#a1a1aa", lineHeight:1.6, marginBottom:8 }}>{item.description}</p>
+                          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+                            <div>
+                              <p style={{ fontSize:11, color:"#a1a1aa", marginBottom:5 }}>Submitted Code</p>
+                              <pre style={{ fontSize:11, color:"#f4f4f5", whiteSpace:"pre-wrap", background:"#050609", border:"1px solid rgba(255,255,255,.07)", borderRadius:8, padding:"10px", maxHeight:180, overflow:"auto" }}>{item.code || "No code submitted"}</pre>
+                            </div>
+                            <div>
+                              <p style={{ fontSize:11, color:"#a1a1aa", marginBottom:5 }}>Testcase Results</p>
+                              <pre style={{ fontSize:11, color:"#a3e635", whiteSpace:"pre-wrap", background:"#050609", border:"1px solid rgba(255,255,255,.07)", borderRadius:8, padding:"10px", minHeight:84 }}>{item.testcase_output || "No testcase results"}</pre>
+                              {item.analysis && (
+                                <div style={{ marginTop:8, padding:"10px", borderRadius:8, background:"rgba(99,102,241,.08)", border:"1px solid rgba(99,102,241,.18)" }}>
+                                  <p style={{ fontSize:11, color:"#818cf8", marginBottom:4 }}>AI Analysis</p>
+                                  <p style={{ fontSize:12, color:"#a1a1aa" }}>{item.analysis.verdict} • Score {item.analysis.overall_score}/10</p>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 )}

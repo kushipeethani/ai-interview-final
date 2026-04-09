@@ -181,6 +181,7 @@ class SaveInterviewRequest(BaseModel):
     scores: dict = {}
     proctoring: dict = {}
     qa: List[dict] = []
+    coding: dict = {}
 
 @app.post("/interviews/save")
 async def save_interview(req: SaveInterviewRequest, authorization: Optional[str] = Header(default=None)):
@@ -201,6 +202,7 @@ async def save_interview(req: SaveInterviewRequest, authorization: Optional[str]
         "scores": req.scores,
         "proctoring": req.proctoring,
         "qa": req.qa,
+        "coding": req.coding,
     }
     INTERVIEWS_DB.append(iv)
     save_interviews()
@@ -297,12 +299,14 @@ class GenerateCodingProblemsRequest(BaseModel):
 
 @app.post("/generate-coding-problems")
 async def generate_coding_problems(req: GenerateCodingProblemsRequest):
-    """Generates 4 coding problems based on resume or AI choice, for any language."""
+    """Generates 3 coding problems based on resume or AI choice, for any language."""
     content_msg = f"""{req.prompt}
 
-Generate exactly 4 coding problems for a {req.language} coding interview.
+Generate exactly 3 coding problems for a {req.language} coding interview.
 Respond with ONLY a valid JSON array. No text before or after.
 Each object must have: title, difficulty (Easy/Medium/Hard), tags (array), description, examples (array of strings).
+The difficulty mix must be exactly: 2 Easy and 1 Medium.
+The questions should feel fresh and varied for this candidate, not generic repeats.
 
 Example format:
 [
@@ -320,7 +324,12 @@ Example format:
         problems = parse_json(raw)
         if not isinstance(problems, list):
             raise ValueError("Not a list")
-        return {"problems": problems[:4]}
+        easy = [p for p in problems if str(p.get("difficulty", "")).lower() == "easy"]
+        medium = [p for p in problems if str(p.get("difficulty", "")).lower() == "medium"]
+        selected = easy[:2] + medium[:1]
+        if len(selected) < 3:
+            selected = problems[:3]
+        return {"problems": selected[:3]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Parse error: {str(e)} | Raw: {raw[:200]}")
 

@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 
 // ─── Backend API Base URL ────────────────────────────────────────────────────
-const API = "https://your-backend-url.onrender.com";
+const API = "https://ai-interview-final-aaki.onrender.com";
 // ─── Token helpers ───────────────────────────────────────────────────────────
 const getToken = () => sessionStorage.getItem("token");
 const getUser  = () => { try { return JSON.parse(sessionStorage.getItem("user")||"null"); } catch { return null; } };

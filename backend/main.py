@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Header, UploadFile, File
+from fastapi import FastAPI, HTTPException, Header
 import uuid
 import hashlib
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,15 +8,7 @@ import httpx
 import os
 import json
 import re
-import io
 from dotenv import load_dotenv
-
-# PDF parsing support
-try:
-    import PyPDF2
-    PDF_SUPPORT = True
-except ImportError:
-    PDF_SUPPORT = False
 
 load_dotenv()
 
@@ -24,7 +16,7 @@ app = FastAPI(title="AI Interview Assistant API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:5173", "http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -272,6 +264,41 @@ class AskRecruiterRequest(BaseModel):
 def root():
     return {"status": "AI Interview Assistant API running", "model": MODEL}
 
+
+
+class GenerateCodingProblemsRequest(BaseModel):
+    prompt: str
+    language: str = "javascript"
+
+@app.post("/generate-coding-problems")
+async def generate_coding_problems(req: GenerateCodingProblemsRequest):
+    """Generates 4 coding problems based on resume or AI choice, for any language."""
+    content_msg = f"""{req.prompt}
+
+Generate exactly 4 coding problems for a {req.language} coding interview.
+Respond with ONLY a valid JSON array. No text before or after.
+Each object must have: title, difficulty (Easy/Medium/Hard), tags (array), description, examples (array of strings).
+
+Example format:
+[
+  {{
+    "title": "Two Sum",
+    "difficulty": "Easy",
+    "tags": ["Array", "HashMap"],
+    "description": "Given an array of integers...",
+    "examples": ["Input: nums=[2,7,11,15], target=9 → Output: [0,1]"]
+  }}
+]"""
+
+    raw = await call_groq([{"role": "user", "content": content_msg}], max_tokens=1500)
+    try:
+        problems = parse_json(raw)
+        if not isinstance(problems, list):
+            raise ValueError("Not a list")
+        return {"problems": problems[:4]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Parse error: {str(e)} | Raw: {raw[:200]}")
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -280,49 +307,6 @@ def health():
 def get_rag_kb():
     return {"kb": RAG_KB}
 
-
-
-
-# ─── Resume Parser ────────────────────────────────────────────────────────────
-@app.post("/parse-resume")
-async def parse_resume(file: UploadFile = File(...)):
-    """
-    Accepts a PDF or TXT resume file.
-    Returns the extracted plain text so the frontend can send it
-    to /generate-questions as resume_text.
-    """
-    try:
-        content_bytes = await file.read()
-        filename = (file.filename or "").lower()
-
-        if filename.endswith(".pdf"):
-            # ---- PDF ----
-            if not PDF_SUPPORT:
-                raise HTTPException(status_code=500, detail="PyPDF2 not installed. Run: pip install PyPDF2")
-            reader = PyPDF2.PdfReader(io.BytesIO(content_bytes))
-            text = ""
-            for page in reader.pages:
-                extracted = page.extract_text()
-                if extracted:
-                    text += extracted + "\n"
-        else:
-            # ---- TXT or any other text file ----
-            text = content_bytes.decode("utf-8", errors="ignore")
-
-        text = text.strip()
-        if not text:
-            raise HTTPException(status_code=400, detail="Could not extract text from resume. Try a text (.txt) file.")
-
-        return {
-            "success": True,
-            "text": text,
-            "preview": text[:300] + ("..." if len(text) > 300 else "")
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Resume parsing failed: {str(e)}")
 
 @app.post("/generate-questions")
 async def generate_questions(req: GenerateQuestionsRequest):

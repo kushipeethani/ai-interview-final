@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 
 // ─── Backend API Base URL ────────────────────────────────────────────────────
-const API = "https://ai-interview-final-aaki.onrender.com";
+const API = "http://localhost:8000";
 
 // ─── Token helpers ───────────────────────────────────────────────────────────
 const getToken = () => sessionStorage.getItem("token");
@@ -170,6 +170,7 @@ function ProctoringPanel({ active }) {
     setAlerts(a => [{ id:Date.now(), msg, type, time:new Date().toLocaleTimeString() }, ...a].slice(0,10));
   }, []);
 
+  // Tab switch detection
   useEffect(() => {
     if (!active) return;
     const onBlur = () => setTabViolations(v => { const n=v+1; addAlert(`Tab switch #${n}`,"danger"); return n; });
@@ -177,24 +178,36 @@ function ProctoringPanel({ active }) {
     return () => window.removeEventListener("blur", onBlur);
   }, [active, addAlert]);
 
-  const startCamera = async () => {
+  const startCamera = useCallback(async () => {
     setStatus("loading");
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video:true });
+      const stream = await navigator.mediaDevices.getUserMedia({ video:true, audio:false });
       streamRef.current = stream;
       if (videoRef.current) videoRef.current.srcObject = stream;
       setStatus("ready"); setFaceStatus("detected");
-      addAlert("Webcam active","info");
+      addAlert("Webcam active — proctoring started","info");
       faceCheckRef.current = setInterval(() => {
         const r = Math.random();
         if (r < 0.05) { setFaceStatus("missing"); addAlert("⚠ Face not detected!","danger"); }
         else if (r < 0.08) { setFaceStatus("multiple"); addAlert("⚠ Multiple faces!","danger"); }
         else setFaceStatus("detected");
       }, 4000);
-    } catch { setStatus("error"); addAlert("Camera denied","warn"); }
-  };
+    } catch { setStatus("error"); addAlert("Camera permission denied","warn"); }
+  }, [addAlert]);
 
-  useEffect(() => () => { clearInterval(faceCheckRef.current); streamRef.current?.getTracks().forEach(t => t.stop()); }, []);
+  // AUTO-START camera when active becomes true
+  useEffect(() => {
+    if (active && status === "idle") {
+      startCamera();
+    }
+  }, [active, status, startCamera]);
+
+  // Cleanup on unmount
+  useEffect(() => () => {
+    clearInterval(faceCheckRef.current);
+    streamRef.current?.getTracks().forEach(t => t.stop());
+  }, []);
+
   const faceColor = { detected:"#22c55e", missing:"#ef4444", multiple:"#f59e0b", waiting:"#52525b" }[faceStatus];
 
   return (
@@ -202,13 +215,16 @@ function ProctoringPanel({ active }) {
       <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:14 }}>
         <div style={{ color:status==="ready"?"#22c55e":"#f59e0b" }}><Icons.Shield/></div>
         <span style={{ fontSize:13, fontWeight:700 }}>Proctoring</span>
-        <span style={{ marginLeft:"auto", fontSize:11, color:"#52525b" }}>{status==="ready"?"● Active":"○ Inactive"}</span>
+        <span style={{ marginLeft:"auto", fontSize:11, color:status==="ready"?"#22c55e":"#52525b" }}>
+          {status==="ready"?"● Active":status==="loading"?"⏳ Starting...":status==="error"?"✗ Error":"○ Waiting"}
+        </span>
       </div>
       <div style={{ position:"relative", borderRadius:10, overflow:"hidden", background:"#070810", marginBottom:14, aspectRatio:"4/3" }}>
         <video ref={videoRef} autoPlay muted playsInline style={{ width:"100%", height:"100%", objectFit:"cover", display:status==="ready"?"block":"none" }}/>
         {status !== "ready" && (
           <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:10, color:"#52525b" }}>
-            <Icons.Camera/><p style={{ fontSize:12 }}>{status==="error"?"Camera unavailable":"Not started"}</p>
+            {status==="loading"?<Icons.Spin size={28}/>:<Icons.Camera/>}
+            <p style={{ fontSize:12 }}>{status==="error"?"Camera permission denied — check browser settings":status==="loading"?"Starting camera...":"Waiting..."}</p>
           </div>
         )}
         {status === "ready" && (
@@ -217,7 +233,7 @@ function ProctoringPanel({ active }) {
             <div style={{ position:"absolute", bottom:8, left:8, padding:"3px 8px", borderRadius:6, background:"rgba(0,0,0,.7)", fontSize:11, color:faceColor }}>
               ● {faceStatus==="detected"?"Face OK":faceStatus==="missing"?"No face":"Multiple faces"}
             </div>
-            <div style={{ position:"absolute", top:8, right:8, padding:"2px 7px", borderRadius:5, background:"rgba(239,68,68,.8)", fontSize:10, color:"#fff", fontWeight:600 }}>REC</div>
+            <div style={{ position:"absolute", top:8, right:8, padding:"2px 7px", borderRadius:5, background:"rgba(239,68,68,.8)", fontSize:10, color:"#fff", fontWeight:600 }}>● REC</div>
           </>
         )}
       </div>
@@ -229,11 +245,6 @@ function ProctoringPanel({ active }) {
           </div>
         ))}
       </div>
-      {status !== "ready" && (
-        <button className="btn btn-primary" style={{ width:"100%", marginBottom:10 }} onClick={startCamera} disabled={status==="loading"}>
-          {status==="loading"?<><Icons.Spin/>Starting…</>:<><Icons.Camera/>Enable Webcam</>}
-        </button>
-      )}
       {alerts.length > 0 && (
         <div style={{ maxHeight:130, overflowY:"auto", display:"flex", flexDirection:"column", gap:4 }}>
           {alerts.map(a => (
@@ -324,23 +335,77 @@ function RAGPanel({ onSelectQuestion }) {
   );
 }
 
+// ─── Language configs ─────────────────────────────────────────────────────────
+const LANGUAGES = {
+  javascript: { label:"JavaScript", comment:"// ", starter:(fn)=>`function ${fn}() {\n  // Your solution here\n\n}` },
+  python:     { label:"Python",     comment:"# ",  starter:(fn)=>`def ${fn}():\n    # Your solution here\n    pass` },
+  java:       { label:"Java",       comment:"// ", starter:(fn)=>`public class Solution {\n    public static void ${fn}() {\n        // Your solution here\n    }\n}` },
+  c:          { label:"C",          comment:"// ", starter:(fn)=>`#include <stdio.h>\n\nvoid ${fn}() {\n    // Your solution here\n}` },
+  cpp:        { label:"C++",        comment:"// ", starter:(fn)=>`#include <bits/stdc++.h>\nusing namespace std;\n\nvoid ${fn}() {\n    // Your solution here\n}` },
+};
+
 // ─── Coding Interview Mode ────────────────────────────────────────────────────
 function CodingInterviewMode() {
   const [problemIdx, setProblemIdx] = useState(0);
+  const [language, setLanguage] = useState("javascript");
   const [code, setCode] = useState(CODING_PROBLEMS[0].starterCode);
   const [output, setOutput] = useState("");
   const [analysis, setAnalysis] = useState(null);
   const [isRunning, setIsRunning] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
   const [tab, setTab] = useState("problem");
-  const problem = CODING_PROBLEMS[problemIdx];
+  const [resumeText, setResumeText] = useState("");
+  const [aiProblems, setAiProblems] = useState([]);
+  const fileRef = useRef();
 
-  useEffect(() => { setCode(problem.starterCode); setOutput(""); setAnalysis(null); setTab("problem"); }, [problemIdx]);
+  const allProblems = aiProblems.length > 0 ? aiProblems : CODING_PROBLEMS;
+  const problem = allProblems[problemIdx] || CODING_PROBLEMS[0];
+
+  // When language or problem changes, update starter code
+  useEffect(() => {
+    const fnName = problem.title.replace(/\s+/g,"").replace(/[^a-zA-Z0-9]/g,"");
+    const langCfg = LANGUAGES[language];
+    const starter = langCfg.starter(fnName.charAt(0).toLowerCase()+fnName.slice(1));
+    setCode(starter);
+    setOutput(""); setAnalysis(null); setTab("problem");
+  }, [problemIdx, language]);
+
+  // Upload resume for AI problem generation
+  const handleResumeUpload = async e => {
+    const f = e.target.files[0]; if (!f) return;
+    try {
+      const formData = new FormData();
+      formData.append("file", f);
+      const res = await fetch(`${API}/parse-resume`, { method:"POST", body:formData });
+      const data = await res.json();
+      setResumeText(data.text || "");
+    } catch {}
+  };
+
+  // Generate coding problems based on resume using AI
+  const generateProblems = async () => {
+    setIsGenerating(true);
+    try {
+      const prompt = resumeText
+        ? `Based on this resume, generate 4 coding interview problems suited for the candidate's background:\n${resumeText.slice(0,1500)}`
+        : "Generate 4 diverse coding interview problems covering arrays, strings, dynamic programming, and system design.";
+      const data = await post("/generate-coding-problems", { prompt, language });
+      if (data.problems && data.problems.length > 0) {
+        setAiProblems(data.problems);
+        setProblemIdx(0);
+      }
+    } catch {
+      // fallback: shuffle existing problems
+      setAiProblems([...CODING_PROBLEMS].sort(() => Math.random() - 0.5));
+      setProblemIdx(0);
+    } finally { setIsGenerating(false); }
+  };
 
   const runCode = async () => {
     setIsRunning(true); setOutput("");
     try {
-      const data = await post("/run-code", { problem_title: problem.title, code, examples: problem.examples });
+      const data = await post("/run-code", { problem_title: problem.title, code, examples: problem.examples, language });
       setOutput(data.output);
     } catch (e) { setOutput("Error: " + e.message); }
     finally { setIsRunning(false); }
@@ -349,7 +414,7 @@ function CodingInterviewMode() {
   const analyzeCode = async () => {
     setIsAnalyzing(true); setAnalysis(null);
     try {
-      const data = await post("/analyze-code", { problem_title: problem.title, code, examples: problem.examples });
+      const data = await post("/analyze-code", { problem_title: problem.title, code, examples: problem.examples, language });
       setAnalysis(data); setTab("analysis");
     } catch {
       setAnalysis({ time_complexity:"O(?)", space_complexity:"O(?)", correctness:5, code_quality:5, bugs:[], suggestions:["Submit valid code"], overall_score:5, verdict:"Acceptable" });
@@ -362,14 +427,27 @@ function CodingInterviewMode() {
 
   return (
     <div>
-      <div style={{ display:"flex", gap:8, marginBottom:20, flexWrap:"wrap" }}>
-        {CODING_PROBLEMS.map((p,i) => (
-          <button key={i} onClick={() => setProblemIdx(i)} className="btn btn-ghost"
-            style={{ background:problemIdx===i?"rgba(99,102,241,.15)":undefined, border:problemIdx===i?"1px solid rgba(99,102,241,.35)":undefined, color:problemIdx===i?"#818cf8":"#a1a1aa" }}>
-            {p.title} <span style={{ fontSize:10, padding:"1px 6px", borderRadius:4, background:`${diffColor[p.difficulty]}18`, color:diffColor[p.difficulty] }}>{p.difficulty}</span>
+      {/* Top controls: problem tabs + language + resume AI generate */}
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16, flexWrap:"wrap", gap:10 }}>
+        <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+          {allProblems.map((p,i) => (
+            <button key={i} onClick={() => setProblemIdx(i)} className="btn btn-ghost"
+              style={{ background:problemIdx===i?"rgba(99,102,241,.15)":undefined, border:problemIdx===i?"1px solid rgba(99,102,241,.35)":undefined, color:problemIdx===i?"#818cf8":"#a1a1aa", fontSize:12 }}>
+              {p.title} <span style={{ fontSize:9, padding:"1px 5px", borderRadius:4, background:`${diffColor[p.difficulty]||"#6366f1"}18`, color:diffColor[p.difficulty]||"#818cf8" }}>{p.difficulty||"AI"}</span>
+            </button>
+          ))}
+        </div>
+        <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+          <input ref={fileRef} type="file" accept=".pdf,.txt" style={{ display:"none" }} onChange={handleResumeUpload}/>
+          <button className="btn btn-ghost" style={{ fontSize:11 }} onClick={() => fileRef.current?.click()}>
+            📄 {resumeText?"Resume loaded":"Upload Resume"}
           </button>
-        ))}
+          <button className="btn btn-primary" style={{ fontSize:11 }} onClick={generateProblems} disabled={isGenerating}>
+            {isGenerating?<><Icons.Spin/>Generating…</>:"🤖 AI Generate Problems"}
+          </button>
+        </div>
       </div>
+
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1.2fr", gap:16 }}>
         <div>
           <div style={{ display:"flex", gap:1, marginBottom:12, background:"rgba(255,255,255,.03)", borderRadius:9, padding:3, border:"1px solid rgba(255,255,255,.07)" }}>
@@ -381,11 +459,11 @@ function CodingInterviewMode() {
             <div className="card">
               <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:10 }}>
                 <h3 style={{ fontSize:15, fontWeight:700 }}>{problem.title}</h3>
-                <span style={{ padding:"2px 8px", borderRadius:6, fontSize:11, background:`${diffColor[problem.difficulty]}18`, color:diffColor[problem.difficulty], fontWeight:600 }}>{problem.difficulty}</span>
+                <span style={{ padding:"2px 8px", borderRadius:6, fontSize:11, background:`${diffColor[problem.difficulty]||"#6366f1"}18`, color:diffColor[problem.difficulty]||"#818cf8", fontWeight:600 }}>{problem.difficulty||"Custom"}</span>
               </div>
-              <div style={{ display:"flex", gap:5, marginBottom:10, flexWrap:"wrap" }}>{problem.tags.map(t => <span key={t} className="tag">{t}</span>)}</div>
+              <div style={{ display:"flex", gap:5, marginBottom:10, flexWrap:"wrap" }}>{(problem.tags||[]).map(t => <span key={t} className="tag">{t}</span>)}</div>
               <p style={{ fontSize:13, color:"#a1a1aa", lineHeight:1.65, marginBottom:12 }}>{problem.description}</p>
-              {problem.examples.map((ex,i) => <div key={i} style={{ padding:"7px 10px", borderRadius:7, background:"rgba(0,0,0,.3)", fontFamily:"monospace", fontSize:11, color:"#a1a1aa", marginBottom:5 }}>{ex}</div>)}
+              {(problem.examples||[]).map((ex,i) => <div key={i} style={{ padding:"7px 10px", borderRadius:7, background:"rgba(0,0,0,.3)", fontFamily:"monospace", fontSize:11, color:"#a1a1aa", marginBottom:5 }}>{ex}</div>)}
             </div>
           )}
           {tab === "analysis" && analysis ? (
@@ -412,7 +490,15 @@ function CodingInterviewMode() {
         </div>
         <div>
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
-            <div style={{ display:"flex", alignItems:"center", gap:6, color:"#52525b" }}><Icons.Terminal/><span style={{ fontSize:12 }}>JavaScript</span></div>
+            {/* Language selector */}
+            <div style={{ display:"flex", gap:4 }}>
+              {Object.entries(LANGUAGES).map(([key, cfg]) => (
+                <button key={key} onClick={() => setLanguage(key)} className="btn btn-ghost"
+                  style={{ padding:"4px 9px", fontSize:11, background:language===key?"rgba(99,102,241,.2)":undefined, color:language===key?"#818cf8":"#52525b", border:language===key?"1px solid rgba(99,102,241,.35)":"1px solid transparent" }}>
+                  {cfg.label}
+                </button>
+              ))}
+            </div>
             <div style={{ display:"flex", gap:8 }}>
               <button className="btn btn-ghost" style={{ fontSize:12 }} onClick={runCode} disabled={isRunning}>{isRunning?<><Icons.Spin/>Running…</>:<><Icons.Play/>Run</>}</button>
               <button className="btn btn-primary" style={{ fontSize:12 }} onClick={analyzeCode} disabled={isAnalyzing}>{isAnalyzing?<><Icons.Spin/>Analyzing…</>:"AI Analyze →"}</button>
@@ -430,6 +516,41 @@ function CodingInterviewMode() {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ─── Save Interview Button ────────────────────────────────────────────────────
+function SaveInterviewButton({ report, role }) {
+  const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const saveInterview = async () => {
+    if (saved || saving) return;
+    setSaving(true);
+    try {
+      await post("/interviews/save", {
+        role,
+        score: report.weighted_total || 0,
+        recommendation: report.recommendation || "Maybe",
+        skills: [],
+        summary: report.summary || "",
+        strengths: report.strengths || [],
+        improvements: report.improvements || [],
+        scores: report.metric_scores || {},
+      }, true);
+      setSaved(true);
+    } catch (e) {
+      console.error("Save failed:", e.message);
+    } finally { setSaving(false); }
+  };
+
+  // Auto-save when component mounts
+  useEffect(() => { saveInterview(); }, []);
+
+  return (
+    <div style={{ padding:"10px 14px", borderRadius:9, background:saved?"rgba(34,197,94,.08)":"rgba(99,102,241,.06)", border:`1px solid ${saved?"rgba(34,197,94,.2)":"rgba(99,102,241,.2)"}`, fontSize:12, color:saved?"#4ade80":"#818cf8", marginBottom:4 }}>
+      {saving?"⏳ Saving to HR Dashboard...":saved?"✅ Saved to HR Dashboard":"💾 Save to HR Dashboard"}
     </div>
   );
 }
@@ -453,26 +574,11 @@ function InterviewPage({ onFinish }) {
   const recognitionRef = useRef();
   const fileRef = useRef();
 
-  const handleFile = async e => {
+  const handleFile = e => {
     const f = e.target.files[0]; if (!f) return;
-    setError("");
-    setResumeText(""); // clear old text
-
-    // Send file to backend /parse-resume which handles both PDF and TXT
-    try {
-      const formData = new FormData();
-      formData.append("file", f);
-      const res = await fetch(`${API}/parse-resume`, { method: "POST", body: formData });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || "Upload failed");
-      }
-      const data = await res.json();
-      setResumeText(data.text.slice(0, 4000)); // use extracted text
-      setError(""); // clear any previous errors
-    } catch (err) {
-      setError("Resume upload failed: " + err.message);
-    }
+    const r = new FileReader();
+    r.onload = ev => setResumeText(ev.target.result.slice(0, 3000));
+    r.readAsText(f);
   };
 
   const speakQuestion = (text) => {
@@ -488,14 +594,33 @@ function InterviewPage({ onFinish }) {
   const startListening = () => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) { setError("Speech recognition not available — type your answer."); return; }
-    const rec = new SR(); rec.continuous = true; rec.interimResults = true; rec.lang = "en-US";
+    // Stop any existing recognition first
+    if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch(e) {} }
+    const rec = new SR();
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.lang = "en-US";
     rec.onresult = e => setTranscript(Array.from(e.results).map(r => r[0].transcript).join(" "));
-    rec.onerror = () => setIsListening(false);
-    rec.onend = () => setIsListening(false);
-    rec.start(); recognitionRef.current = rec; setIsListening(true);
+    rec.onerror = () => { setIsListening(false); };
+    // Auto-restart when recognition ends (keeps mic always ON)
+    rec.onend = () => {
+      if (recognitionRef.current === rec) {
+        try { rec.start(); } catch(e) { setIsListening(false); }
+      }
+    };
+    rec.start();
+    recognitionRef.current = rec;
+    setIsListening(true);
   };
 
-  const stopListening = () => { recognitionRef.current?.stop(); setIsListening(false); };
+  const stopListening = () => {
+    if (recognitionRef.current) {
+      const r = recognitionRef.current;
+      recognitionRef.current = null; // prevent auto-restart
+      try { r.stop(); } catch(e) {}
+    }
+    setIsListening(false);
+  };
 
   const generateQuestions = async () => {
     setIsLoading(true); setError("");
@@ -503,6 +628,10 @@ function InterviewPage({ onFinish }) {
       const data = await post("/generate-questions", { role, resume_text: resumeText });
       setQuestions(data.questions);
       setStep("interview");
+      // Auto-start mic and webcam when interview begins
+      setTimeout(() => {
+        startListening();
+      }, 1000); // slight delay so question is spoken first
       speakQuestion(data.questions[0]);
     } catch (e) {
       setError("Error: " + e.message);
@@ -556,9 +685,9 @@ function InterviewPage({ onFinish }) {
               <label style={{ fontSize:12, fontWeight:600, color:"#a1a1aa", display:"block", marginBottom:7 }}>RESUME (OPTIONAL)</label>
               <div onClick={() => fileRef.current?.click()} style={{ border:"2px dashed rgba(255,255,255,.07)", borderRadius:9, padding:"18px", textAlign:"center", cursor:"pointer" }}>
                 <div style={{ color:"#52525b", marginBottom:5, display:"flex", justifyContent:"center" }}><Icons.Upload/></div>
-                <p style={{ fontSize:12, color:"#a1a1aa" }}>{resumeText?"✓ Resume loaded":"Click to upload PDF or TXT"}</p>
+                <p style={{ fontSize:12, color:"#a1a1aa" }}>{resumeText?"✓ Resume loaded":"Click to upload .txt"}</p>
               </div>
-              <input ref={fileRef} type="file" accept=".pdf,.txt" style={{ display:"none" }} onChange={handleFile}/>
+              <input ref={fileRef} type="file" accept=".txt" style={{ display:"none" }} onChange={handleFile}/>
               <textarea className="input" style={{ marginTop:8, minHeight:60, resize:"vertical" }} placeholder="Or paste resume text…" value={resumeText} onChange={e => setResumeText(e.target.value)}/>
             </div>
             <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"10px 14px", borderRadius:9, background:"rgba(255,255,255,.03)", border:"1px solid rgba(255,255,255,.07)" }}>
@@ -588,13 +717,13 @@ function InterviewPage({ onFinish }) {
     const progress = (currentQ / questions.length) * 100;
     return (
       <main style={{ maxWidth:1000, margin:"0 auto", padding:"32px 20px 80px" }}>
-        <div style={{ display:"grid", gridTemplateColumns:showProctor?"1fr 280px":"1fr", gap:20, alignItems:"start" }}>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 280px", gap:20, alignItems:"start" }}>
           <div>
             <div style={{ display:"flex", justifyContent:"space-between", marginBottom:6 }}>
               <span style={{ fontSize:12, color:"#a1a1aa" }}>Question {currentQ+1} of {questions.length}</span>
               <div style={{ display:"flex", gap:6 }}>
                 <span style={{ fontSize:12, color:"#52525b" }}>{role}</span>
-                <button className="btn btn-ghost" style={{ padding:"2px 8px", fontSize:11 }} onClick={() => setShowProctor(!showProctor)}><Icons.Camera/> {showProctor?"Hide":"Proctor"}</button>
+                <span style={{ fontSize:11, color:"#22c55e", padding:"2px 8px", borderRadius:6, background:"rgba(34,197,94,.08)", border:"1px solid rgba(34,197,94,.2)" }}>● Proctoring Active</span>
               </div>
             </div>
             <div style={{ height:4, background:"rgba(255,255,255,.07)", borderRadius:4, marginBottom:18, overflow:"hidden" }}>
@@ -617,10 +746,11 @@ function InterviewPage({ onFinish }) {
                 </div>
                 <textarea className="input" style={{ minHeight:80, resize:"vertical", marginBottom:10 }} placeholder="Speak or type your answer…" value={transcript} onChange={e => setTranscript(e.target.value)}/>
                 <div style={{ display:"flex", gap:10 }}>
-                  {!isListening
-                    ?<button className="btn btn-primary" onClick={startListening} style={{ flex:1 }}><Icons.Mic size={15}/> Record</button>
-                    :<button className="btn btn-danger" onClick={stopListening} style={{ flex:1 }}>⏹ Stop</button>
-                  }
+                  <div style={{ flex:1, display:"flex", alignItems:"center", gap:8, padding:"9px 14px", borderRadius:9, background:isListening?"rgba(99,102,241,.1)":"rgba(255,255,255,.03)", border:isListening?"1px solid rgba(99,102,241,.35)":"1px solid rgba(255,255,255,.07)" }}>
+                    <Icons.Mic size={15}/>
+                    <span style={{ fontSize:12, color:isListening?"#818cf8":"#52525b" }}>{isListening?"🔴 Mic ON — speak now":"Mic initializing..."}</span>
+                    <AudioBars active={isListening}/>
+                  </div>
                   <button className="btn btn-ghost" onClick={submitAnswer} disabled={isLoading||!transcript.trim()} style={{ flex:1 }}>
                     {isLoading?<><Icons.Spin/>Evaluating…</>:"Submit →"}
                   </button>
@@ -659,7 +789,7 @@ function InterviewPage({ onFinish }) {
               </div>
             )}
           </div>
-          {showProctor && <ProctoringPanel active={true}/>}
+          <ProctoringPanel active={true}/>
         </div>
       </main>
     );
@@ -699,7 +829,8 @@ function InterviewPage({ onFinish }) {
                 {report.improvements?.map((s,i) => <p key={i} style={{ fontSize:12, color:"#a1a1aa", marginBottom:4 }}>· {s}</p>)}
               </div>
             </div>
-            <div style={{ display:"flex", gap:10 }}>
+            <SaveInterviewButton report={report} role={role}/>
+            <div style={{ display:"flex", gap:10, marginTop:10 }}>
               <button className="btn btn-primary" style={{ flex:1 }} onClick={resetAll}>Start New Interview</button>
               <button className="btn btn-ghost" onClick={onFinish}>← Home</button>
             </div>

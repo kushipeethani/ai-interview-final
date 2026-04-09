@@ -457,3 +457,6 @@ Answer professionally in 2-3 sentences."""
 
     answer = await call_groq([{"role": "user", "content": content}], max_tokens=300)
     return {"answer": answer}
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))

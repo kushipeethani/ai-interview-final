@@ -127,11 +127,11 @@ def to_number(value):
 
 
 def get_recommendation_for_score(score: float) -> str:
-    if score >= 85:
+    if score >= 75:
         return "Strong Hire"
-    if score >= 70:
-        return "Hire"
     if score >= 50:
+        return "Hire"
+    if score >= 40:
         return "Maybe"
     return "No Hire"
 

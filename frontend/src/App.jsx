@@ -580,9 +580,9 @@ const getCodingOutputScore = (output) => {
 const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test((value || "").trim());
 
 const getRecommendationForScore = (score) => {
-  if (score >= 85) return "Strong Hire";
-  if (score >= 70) return "Hire";
-  if (score >= 50) return "Maybe";
+  if (score >= 75) return "Strong Hire";
+  if (score >= 50) return "Hire";
+  if (score >= 40) return "Maybe";
   return "No Hire";
 };
 

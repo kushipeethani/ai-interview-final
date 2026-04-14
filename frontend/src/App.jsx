@@ -538,13 +538,52 @@ const getCodingAnalysisScore = (analysis) => {
   return partialScores.reduce((sum, value) => sum + value, 0) / partialScores.length;
 };
 
+const getCodingOutputScore = (output) => {
+  const text = typeof output === "string" ? output.trim() : "";
+  if (!text) return null;
+
+  const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  const testLines = lines.filter(line => /test\s*\d+/i.test(line));
+  const relevantLines = testLines.length > 0 ? testLines : lines;
+
+  let passed = 0;
+  let failed = 0;
+
+  relevantLines.forEach(line => {
+    const normalized = line.toLowerCase();
+    if (
+      normalized.includes("pass") ||
+      normalized.includes("passed") ||
+      normalized.includes("works correctly") ||
+      normalized.includes("match") ||
+      normalized.includes("✓")
+    ) {
+      passed += 1;
+      return;
+    }
+    if (
+      normalized.includes("fail") ||
+      normalized.includes("failed") ||
+      normalized.includes("error") ||
+      normalized.includes("incorrect") ||
+      normalized.includes("no runnable solution")
+    ) {
+      failed += 1;
+    }
+  });
+
+  const total = passed + failed;
+  if (!total) return null;
+  return (passed / total) * 10;
+};
+
 const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test((value || "").trim());
 
 const getInterviewDisplayScore = (interview) => {
   const savedScore = toFiniteNumber(interview?.score);
   const codingProblems = interview?.coding?.problems || [];
   const codingScores = codingProblems
-    .map(problem => getCodingAnalysisScore(problem.analysis))
+    .map(problem => getCodingAnalysisScore(problem.analysis) ?? getCodingOutputScore(problem.testcase_output))
     .filter(score => score !== null);
 
   if (codingScores.length > 0) {

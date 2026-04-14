@@ -40,6 +40,17 @@ const EVAL_METRICS = [
   { key: "confidence",            label: "Confidence",            weight: 0.10, color: "#22c55e" },
 ];
 
+const TARGET_ROLES = [
+  "Software Engineer",
+  "AI Engineer",
+  "ML Engineer",
+  "Web Developer",
+  "Data Analyst",
+  "DevOps Engineer",
+  "Cyber Security",
+  "QA/Test Engineer",
+];
+
 // ─── Coding Problems ─────────────────────────────────────────────────────────
 const CODING_PROBLEMS = [
   { title: "Two Sum", difficulty: "Easy", tags: ["Array","HashMap"], description: "Given an array of integers nums and an integer target, return indices of the two numbers such that they add up to target.", examples: ["Input: nums=[2,7,11,15], target=9 → Output: [0,1]", "Input: nums=[3,2,4], target=6 → Output: [1,2]"], starterCode: "function twoSum(nums, target) {\n  // Your solution here\n\n}" },
@@ -1040,6 +1051,28 @@ function InterviewPage({ onFinish }) {
   const [proctoringStats, setProctoringStats] = useState({ tabSwitches: 0, faceNotDetected: 0, multipleFaces: 0 });
   const recognitionRef = useRef();
   const fileRef = useRef();
+  const preferredVoiceRef = useRef(null);
+
+  useEffect(() => {
+    if (!window.speechSynthesis) return;
+
+    const pickVoice = () => {
+      const voices = window.speechSynthesis.getVoices() || [];
+      const femaleVoice = voices.find(voice =>
+        /^en/i.test(voice.lang || "") &&
+        /(female|woman|zira|aria|samantha|victoria|karen|moira|ava|allison|jenny|susan)/i.test(voice.name || "")
+      );
+      preferredVoiceRef.current =
+        femaleVoice ||
+        voices.find(voice => /^en/i.test(voice.lang || "")) ||
+        voices[0] ||
+        null;
+    };
+
+    pickVoice();
+    window.speechSynthesis.addEventListener?.("voiceschanged", pickVoice);
+    return () => window.speechSynthesis.removeEventListener?.("voiceschanged", pickVoice);
+  }, []);
 
   const handleFile = async e => {
     const f = e.target.files[0]; if (!f) return;
@@ -1060,7 +1093,12 @@ function InterviewPage({ onFinish }) {
     if (!window.speechSynthesis) return;
     window.speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
+    if (preferredVoiceRef.current) {
+      u.voice = preferredVoiceRef.current;
+      if (preferredVoiceRef.current.lang) u.lang = preferredVoiceRef.current.lang;
+    }
     u.rate = 0.92;
+    u.pitch = 1.15;
     u.onstart = () => setIsSpeaking(true);
     u.onend = () => {
       setIsSpeaking(false);
@@ -1184,7 +1222,9 @@ function InterviewPage({ onFinish }) {
           <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
             <div>
               <label style={{ fontSize:12, fontWeight:600, color:"#a1a1aa", display:"block", marginBottom:7 }}>TARGET ROLE</label>
-              <input className="input" value={role} onChange={e => setRole(e.target.value)} placeholder="Software Engineer…"/>
+              <select className="input" value={role} onChange={e => setRole(e.target.value)}>
+                {TARGET_ROLES.map(option => <option key={option} value={option}>{option}</option>)}
+              </select>
             </div>
             <div>
               <label style={{ fontSize:12, fontWeight:600, color:"#a1a1aa", display:"block", marginBottom:7 }}>RESUME (OPTIONAL)</label>

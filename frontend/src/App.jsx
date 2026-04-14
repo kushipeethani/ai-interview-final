@@ -551,6 +551,7 @@ const getCodingOutputScore = (output) => {
   if (!text) return null;
 
   const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  const normalizedText = text.toLowerCase();
   const testLines = lines.filter(line => /test\s*\d+/i.test(line));
   const relevantLines = testLines.length > 0 ? testLines : lines;
 
@@ -581,6 +582,23 @@ const getCodingOutputScore = (output) => {
   });
 
   const total = passed + failed;
+  if (!total) {
+    if (
+      normalizedText.includes("all tests passed") ||
+      normalizedText.includes("both tests passed") ||
+      normalizedText.includes("results match expected output") ||
+      normalizedText.includes("pattern matching works as expected")
+    ) {
+      return 10;
+    }
+    if (
+      normalizedText.includes("tests failed") ||
+      normalizedText.includes("test failed") ||
+      normalizedText.includes("does not match expected")
+    ) {
+      return 0;
+    }
+  }
   if (!total) return null;
   return (passed / total) * 10;
 };

@@ -156,6 +156,7 @@ def get_coding_output_score(output: str) -> Optional[float]:
         return None
 
     lines = [line.strip() for line in output.splitlines() if line.strip()]
+    normalized_text = output.lower()
     test_lines = [line for line in lines if re.search(r"test\s*\d+", line, re.IGNORECASE)]
     relevant = test_lines or lines
 
@@ -170,6 +171,20 @@ def get_coding_output_score(output: str) -> Optional[float]:
             failed += 1
 
     total = passed + failed
+    if total == 0:
+        if any(token in normalized_text for token in [
+            "all tests passed",
+            "both tests passed",
+            "results match expected output",
+            "pattern matching works as expected",
+        ]):
+            return 10
+        if any(token in normalized_text for token in [
+            "tests failed",
+            "test failed",
+            "does not match expected",
+        ]):
+            return 0
     if total == 0:
         return None
     return (passed / total) * 10

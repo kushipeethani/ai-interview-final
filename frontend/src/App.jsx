@@ -538,6 +538,23 @@ const getCodingAnalysisScore = (analysis) => {
   return partialScores.reduce((sum, value) => sum + value, 0) / partialScores.length;
 };
 
+const getInterviewDisplayScore = (interview) => {
+  const savedScore = toFiniteNumber(interview?.score);
+  const codingProblems = interview?.coding?.problems || [];
+  const codingScores = codingProblems
+    .map(problem => getCodingAnalysisScore(problem.analysis))
+    .filter(score => score !== null);
+
+  if (codingScores.length > 0) {
+    const derivedCodingScore = Math.round(
+      (codingScores.reduce((sum, score) => sum + score, 0) / codingScores.length) * 10
+    );
+    if (savedScore === null || savedScore <= 0) return derivedCodingScore;
+  }
+
+  return savedScore ?? 0;
+};
+
 function CodingInterviewMode() {
   const currentUser = getUser();
   const [problemIdx, setProblemIdx] = useState(0);
@@ -1264,7 +1281,7 @@ function RecruiterPage() {
 
   useEffect(() => {
     get("/interviews/all", true)
-      .then(d => setInterviews(d.interviews || []))
+      .then(d => setInterviews((d.interviews || []).map(iv => ({ ...iv, score: getInterviewDisplayScore(iv) }))))
       .catch(() => {})
       .finally(() => setFetching(false));
   }, []);
@@ -1371,7 +1388,7 @@ function RecruiterPage() {
                   <p style={{ fontSize:13, color:"#a1a1aa", lineHeight:1.7, marginBottom:14 }}>{selected.summary}</p>
                 )}
 
-                {(selected.proctoring || selected.qa?.length > 0) && (
+                {(!selected.coding?.problems?.length && (selected.proctoring || selected.qa?.length > 0)) && (
                   <div style={{ display:"grid", gridTemplateColumns:"1.2fr .8fr", gap:12, marginBottom:14, alignItems:"start" }}>
                     <div style={{ padding:"12px", borderRadius:10, background:"rgba(255,255,255,.03)", border:"1px solid rgba(255,255,255,.07)" }}>
                       <p style={{ fontSize:11, fontWeight:700, color:"#a1a1aa", marginBottom:10 }}>QUESTIONS & ANSWERS</p>
@@ -1490,7 +1507,9 @@ function RecruiterPage() {
               </div>
 
               {/* Metrics breakdown */}
-              {selected.scores && <EvaluationBreakdown scores={selected.scores} weighted_total={selected.score}/>}
+              {!selected.coding?.problems?.length && selected.scores && Object.keys(selected.scores).length > 0 && (
+                <EvaluationBreakdown scores={selected.scores} weighted_total={selected.score}/>
+              )}
             </div>
           ) : (
             <div className="card" style={{ display:"flex", flexDirection:"column", alignItems:"center",
@@ -1632,7 +1651,7 @@ function CandidateDashboard({ user, onStartInterview }) {
 
   useEffect(() => {
     get("/interviews/my", true)
-      .then(d => setInterviews(d.interviews || []))
+      .then(d => setInterviews((d.interviews || []).map(iv => ({ ...iv, score: getInterviewDisplayScore(iv) }))))
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);

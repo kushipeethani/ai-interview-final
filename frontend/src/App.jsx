@@ -455,7 +455,6 @@ function RAGPanel({ onSelectQuestion }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState([]);
   const [kb, setKb] = useState({});
-  const [activeCategory, setActiveCategory] = useState("all");
   const [isSearching, setIsSearching] = useState(false);
 
   useEffect(() => {
@@ -472,10 +471,7 @@ function RAGPanel({ onSelectQuestion }) {
     finally { setIsSearching(false); }
   };
 
-  const cats = ["all", "behavioral", "frontend", "backend", "system_design"];
-  const catColors = { behavioral:"#6366f1", frontend:"#06b6d4", backend:"#8b5cf6", system_design:"#f59e0b" };
   const allQs = Object.entries(kb).flatMap(([cat, qs]) => qs.map(q => ({ cat, q })));
-  const displayed = activeCategory === "all" ? allQs : (kb[activeCategory] || []).map(q => ({ cat: activeCategory, q }));
 
   return (
     <div className="card" style={{ border:"1px solid rgba(6,182,212,.18)" }}>
@@ -490,6 +486,13 @@ function RAGPanel({ onSelectQuestion }) {
           {isSearching?<Icons.Spin/>:<Icons.Search/>}
         </button>
       </div>
+      {results.length === 0 && (
+        <div style={{ marginBottom:12, padding:10, borderRadius:9, background:"rgba(255,255,255,.03)", border:"1px solid rgba(255,255,255,.07)" }}>
+          <p style={{ fontSize:12, color:"#a1a1aa", lineHeight:1.5 }}>
+            Search the knowledge base to see suggested questions here.
+          </p>
+        </div>
+      )}
       {results.length > 0 && (
         <div style={{ marginBottom:12, padding:10, borderRadius:9, background:"rgba(6,182,212,.05)", border:"1px solid rgba(6,182,212,.18)" }}>
           <p style={{ fontSize:11, color:"#06b6d4", fontWeight:600, marginBottom:8 }}>⚡ Matches</p>
@@ -502,26 +505,6 @@ function RAGPanel({ onSelectQuestion }) {
           ))}
         </div>
       )}
-      <div style={{ display:"flex", gap:5, flexWrap:"wrap", marginBottom:10 }}>
-        {cats.map(c => (
-          <button key={c} onClick={() => setActiveCategory(c)} className="btn btn-ghost"
-            style={{ padding:"4px 9px", fontSize:11, background:activeCategory===c?"rgba(99,102,241,.15)":undefined, color:activeCategory===c?"#818cf8":"#52525b", border:activeCategory===c?"1px solid rgba(99,102,241,.3)":"1px solid transparent", textTransform:"capitalize" }}>
-            {c.replace("_"," ")}
-          </button>
-        ))}
-      </div>
-      <div style={{ maxHeight:200, overflowY:"auto", display:"flex", flexDirection:"column", gap:5 }}>
-        {displayed.map((item,i) => (
-          <div key={i} style={{ display:"flex", gap:8, padding:"8px 10px", borderRadius:8, background:"rgba(255,255,255,.02)", border:"1px solid rgba(255,255,255,.07)", cursor:"pointer" }}
-            onClick={() => onSelectQuestion?.(item.q)}
-            onMouseEnter={e => e.currentTarget.style.background="rgba(255,255,255,.05)"}
-            onMouseLeave={e => e.currentTarget.style.background="rgba(255,255,255,.02)"}>
-            <div style={{ width:6, height:6, borderRadius:"50%", background:catColors[item.cat]||"#6366f1", marginTop:5, flexShrink:0 }}/>
-            <p style={{ fontSize:12, color:"#a1a1aa", flex:1 }}>{item.q}</p>
-            <button className="btn btn-ghost" style={{ padding:"2px 7px", fontSize:11, flexShrink:0 }}>↑ Use</button>
-          </div>
-        ))}
-      </div>
     </div>
   );
 }
@@ -536,6 +519,25 @@ const LANGUAGES = {
 };
 
 // ─── Coding Interview Mode ────────────────────────────────────────────────────
+const toFiniteNumber = (value) => {
+  const numeric = typeof value === "string" ? Number(value) : value;
+  return Number.isFinite(numeric) ? numeric : null;
+};
+
+const getCodingAnalysisScore = (analysis) => {
+  if (!analysis) return null;
+
+  const overall = toFiniteNumber(analysis.overall_score);
+  if (overall !== null) return overall;
+
+  const partialScores = [analysis.correctness, analysis.code_quality]
+    .map(toFiniteNumber)
+    .filter(value => value !== null);
+
+  if (!partialScores.length) return null;
+  return partialScores.reduce((sum, value) => sum + value, 0) / partialScores.length;
+};
+
 function CodingInterviewMode() {
   const currentUser = getUser();
   const [problemIdx, setProblemIdx] = useState(0);
@@ -685,8 +687,8 @@ Generate exactly 3 diverse coding interview problems for this candidate. The mix
     if (!completed.length) return;
 
     const overallScores = completed
-      .map(p => p.analysis?.overall_score)
-      .filter(score => typeof score === "number");
+      .map(p => getCodingAnalysisScore(p.analysis))
+      .filter(score => score !== null);
     const avgScore = overallScores.length
       ? Math.round((overallScores.reduce((sum, score) => sum + score, 0) / overallScores.length) * 10)
       : 0;
@@ -926,7 +928,6 @@ function InterviewPage({ onFinish }) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
   const [report, setReport] = useState(null);
-  const [showProctor, setShowProctor] = useState(false);
   const [proctoringStats, setProctoringStats] = useState({ tabSwitches: 0, faceNotDetected: 0, multipleFaces: 0 });
   const recognitionRef = useRef();
   const fileRef = useRef();
@@ -1084,18 +1085,6 @@ function InterviewPage({ onFinish }) {
               </div>
               <input ref={fileRef} type="file" accept=".txt" style={{ display:"none" }} onChange={handleFile}/>
               <textarea className="input" style={{ marginTop:8, minHeight:60, resize:"vertical" }} placeholder="Or paste resume text…" value={resumeText} onChange={e => setResumeText(e.target.value)}/>
-            </div>
-            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"10px 14px", borderRadius:9, background:"rgba(255,255,255,.03)", border:"1px solid rgba(255,255,255,.07)" }}>
-              <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                <div style={{ color:"#f59e0b" }}><Icons.Shield/></div>
-                <div>
-                  <p style={{ fontSize:13, fontWeight:500 }}>Enable Proctoring</p>
-                  <p style={{ fontSize:11, color:"#52525b" }}>Webcam + tab detection</p>
-                </div>
-              </div>
-              <div onClick={() => setShowProctor(!showProctor)} style={{ width:36, height:20, borderRadius:10, background:showProctor?"#6366f1":"rgba(255,255,255,.1)", cursor:"pointer", position:"relative", transition:"background .2s" }}>
-                <div style={{ position:"absolute", top:2, left:showProctor?18:2, width:16, height:16, borderRadius:"50%", background:"#fff", transition:"left .2s" }}/>
-              </div>
             </div>
             {error && <p style={{ color:"#fca5a5", fontSize:12 }}>{error}</p>}
             <button className="btn btn-primary" style={{ fontSize:14, padding:"12px" }} onClick={generateQuestions} disabled={isLoading||!role.trim()}>

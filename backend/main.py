@@ -420,6 +420,8 @@ Respond with ONLY a valid JSON array. No text before or after.
 Each object must have: title, difficulty (Easy/Medium/Hard), tags (array), description, examples (array of strings).
 The difficulty mix must be exactly: 2 Easy and 1 Medium.
 The questions should feel fresh and varied for this candidate, not generic repeats.
+Do not make all 3 problems array-based.
+Prefer company-style hiring questions across different areas such as strings, stacks, heaps, trees, graphs, intervals, design, scheduling, or practical data handling when relevant.
 
 Example format:
 [

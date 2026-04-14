@@ -49,6 +49,14 @@ const CODING_PROBLEMS = [
 ];
 
 // ─── Global CSS ──────────────────────────────────────────────────────────────
+const COMPANY_STYLE_CODING_PROBLEMS = [
+  { title: "Valid Parentheses", difficulty: "Easy", tags: ["Stack","String"], description: "Given a string containing brackets, determine whether the order is valid.", examples: ["Input: s='()[]{}' -> Output: true", "Input: s='([)]' -> Output: false"], starterCode: "function isValid(s) {\n  // Your solution here\n\n}" },
+  { title: "Top K Frequent Words", difficulty: "Easy", tags: ["HashMap","Heap","String"], description: "Given a list of words and an integer k, return the k most frequent words sorted by frequency descending and then alphabetically.", examples: ["Input: words=['i','love','leetcode','i','love','coding'], k=2 -> Output: ['i','love']"], starterCode: "function topKFrequent(words, k) {\n  // Your solution here\n\n}" },
+  { title: "Binary Tree Right Side View", difficulty: "Medium", tags: ["Tree","BFS"], description: "Given the root of a binary tree, return the values visible from the right side from top to bottom.", examples: ["Input: [1,2,3,null,5,null,4] -> Output: [1,3,4]"], starterCode: "function rightSideView(root) {\n  // Your solution here\n\n}" },
+  { title: "LRU Cache", difficulty: "Medium", tags: ["Design","HashMap"], description: "Design a data structure that follows LRU cache constraints. Implement get and put in O(1).", examples: ["cache = new LRUCache(2)", "cache.put(1,1)", "cache.get(1) -> 1"], starterCode: "class LRUCache {\n  constructor(capacity) {\n    // Your solution here\n  }\n  get(key) { }\n  put(key, value) { }\n}" },
+  { title: "Meeting Rooms II", difficulty: "Medium", tags: ["Heap","Intervals","Scheduling"], description: "Given meeting time intervals, find the minimum number of conference rooms required so that no meetings overlap.", examples: ["Input: [[0,30],[5,10],[15,20]] -> Output: 2"], starterCode: "function minMeetingRooms(intervals) {\n  // Your solution here\n\n}" },
+];
+
 const CSS = `
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
 html,body{height:100%;}
@@ -641,8 +649,8 @@ function CodingInterviewMode() {
   const fileRef = useRef();
   const sessionSeedRef = useRef(Date.now());
 
-  const allProblems = aiProblems.length > 0 ? aiProblems : CODING_PROBLEMS;
-  const problem = allProblems[problemIdx] || CODING_PROBLEMS[0];
+  const allProblems = aiProblems.length > 0 ? aiProblems : COMPANY_STYLE_CODING_PROBLEMS;
+  const problem = allProblems[problemIdx] || COMPANY_STYLE_CODING_PROBLEMS[0];
   const isLastProblem = problemIdx >= allProblems.length - 1;
 
   const saveProblemState = useCallback((problemData, next = {}) => {
@@ -696,10 +704,10 @@ function CodingInterviewMode() {
       const prompt = resumeText
         ? `Candidate: ${currentUser?.name || "Unknown Candidate"}.
 Create a fresh coding round seed ${sessionSeedRef.current}.
-Based on this resume, generate exactly 3 coding interview problems suited for the candidate's background. The mix must be 2 Easy and 1 Medium. Avoid repeating common stock sets:\n${resumeText.slice(0,1500)}`
+Based on this resume, generate exactly 3 coding interview problems suited for the candidate's background. The mix must be 2 Easy and 1 Medium. Make them feel like real company hiring questions, not only array problems. Cover diverse areas such as strings, stacks, heaps, trees, graphs, intervals, SQL-style reasoning, design, or scheduling when relevant. Avoid repeating common stock sets:\n${resumeText.slice(0,1500)}`
         : `Candidate: ${currentUser?.name || "Unknown Candidate"}.
 Create a fresh coding round seed ${sessionSeedRef.current}.
-Generate exactly 3 diverse coding interview problems for this candidate. The mix must be 2 Easy and 1 Medium. Make them feel fresh and not identical to standard canned sets.`;
+Generate exactly 3 diverse coding interview problems for this candidate. The mix must be 2 Easy and 1 Medium. Make them feel like real company hiring questions and avoid making all of them array-based. Cover different areas such as strings, stacks, heaps, trees, graphs, intervals, design, or scheduling.`;
       const data = await post("/generate-coding-problems", { prompt, language });
       if (data.problems && data.problems.length > 0) {
         setAiProblems(data.problems);
@@ -709,9 +717,9 @@ Generate exactly 3 diverse coding interview problems for this candidate. The mix
       }
     } catch {
       const fallback = [
-        CODING_PROBLEMS.find(p => p.difficulty === "Easy"),
-        CODING_PROBLEMS.filter(p => p.difficulty === "Easy")[1],
-        CODING_PROBLEMS.find(p => p.difficulty === "Medium"),
+        COMPANY_STYLE_CODING_PROBLEMS.find(p => p.difficulty === "Easy"),
+        COMPANY_STYLE_CODING_PROBLEMS.filter(p => p.difficulty === "Easy")[1],
+        COMPANY_STYLE_CODING_PROBLEMS.find(p => p.difficulty === "Medium"),
       ].filter(Boolean);
       setAiProblems(fallback);
       setProblemIdx(0);

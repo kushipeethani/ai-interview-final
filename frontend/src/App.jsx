@@ -92,6 +92,8 @@ body{background:#06070d;color:#f4f4f5;font-family:sans-serif;min-height:100vh;
 .btn-danger{background:rgba(239,68,68,.12);color:#fca5a5;border:1px solid rgba(239,68,68,.25);}
 .card{background:#0f1120;border:1px solid rgba(255,255,255,.07);border-radius:14px;padding:22px;}
 .input{width:100%;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07);border-radius:9px;padding:9px 13px;color:#f4f4f5;font-size:13px;outline:none;transition:border-color .15s;font-family:inherit;}
+select.input{background-color:#15182b;color:#f4f4f5;color-scheme:dark;}
+select.input option{background:#15182b;color:#f4f4f5;}
 .input:focus{border-color:rgba(99,102,241,.5);}
 .input::placeholder{color:#52525b;}
 .tag{display:inline-flex;align-items:center;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:500;background:rgba(99,102,241,.1);color:#818cf8;border:1px solid rgba(99,102,241,.2);}

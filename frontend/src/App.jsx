@@ -579,21 +579,46 @@ const getCodingOutputScore = (output) => {
 
 const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test((value || "").trim());
 
+const getRecommendationForScore = (score) => {
+  if (score >= 85) return "Strong Hire";
+  if (score >= 70) return "Hire";
+  if (score >= 50) return "Maybe";
+  return "No Hire";
+};
+
 const getInterviewDisplayScore = (interview) => {
   const savedScore = toFiniteNumber(interview?.score);
   const codingProblems = interview?.coding?.problems || [];
+  const totalQuestions = Math.max(
+    toFiniteNumber(interview?.coding?.total_questions) || 0,
+    codingProblems.length
+  );
   const codingScores = codingProblems
-    .map(problem => getCodingAnalysisScore(problem.analysis) ?? getCodingOutputScore(problem.testcase_output))
-    .filter(score => score !== null);
+    .map(problem => getCodingAnalysisScore(problem.analysis) ?? getCodingOutputScore(problem.testcase_output));
 
-  if (codingScores.length > 0) {
+  if (totalQuestions > 0 && codingScores.some(score => score !== null)) {
+    const totalScore = codingScores.reduce((sum, score) => sum + (score ?? 0), 0);
     const derivedCodingScore = Math.round(
-      (codingScores.reduce((sum, score) => sum + score, 0) / codingScores.length) * 10
+      (totalScore / totalQuestions) * 10
     );
-    if (savedScore === null || savedScore <= 0) return derivedCodingScore;
+    if (savedScore === null || savedScore <= 0 || Math.abs(savedScore - derivedCodingScore) >= 20) {
+      return derivedCodingScore;
+    }
   }
 
   return savedScore ?? 0;
+};
+
+const normalizeInterviewForDisplay = (interview) => {
+  const score = getInterviewDisplayScore(interview);
+  if (interview?.coding?.problems?.length) {
+    return {
+      ...interview,
+      score,
+      recommendation: getRecommendationForScore(score),
+    };
+  }
+  return { ...interview, score };
 };
 
 function CodingInterviewMode() {
@@ -744,19 +769,19 @@ Generate exactly 3 diverse coding interview problems for this candidate. The mix
     const completed = problems.filter(p => p.code || p.testcase_output || p.analysis);
     if (!completed.length) return;
 
-    const overallScores = completed
-      .map(p => getCodingAnalysisScore(p.analysis))
-      .filter(score => score !== null);
-    const avgScore = overallScores.length
-      ? Math.round((overallScores.reduce((sum, score) => sum + score, 0) / overallScores.length) * 10)
-      : 0;
+    const totalQuestions = Math.max(allProblems.length, problems.length);
+    const totalScore = problems.reduce(
+      (sum, p) => sum + (getCodingAnalysisScore(p.analysis) ?? getCodingOutputScore(p.testcase_output) ?? 0),
+      0
+    );
+    const avgScore = Math.round((totalScore / totalQuestions) * 10);
 
     setIsSaving(true);
     try {
       await post("/interviews/save", {
         role: `Coding Round (${language})`,
         score: avgScore,
-        recommendation: avgScore >= 80 ? "Hire" : avgScore >= 60 ? "Maybe" : "No Hire",
+        recommendation: getRecommendationForScore(avgScore),
         skills: [],
         summary: `Coding round completed with ${completed.length} worked problem${completed.length === 1 ? "" : "s"} in ${language}.`,
         strengths: [],
@@ -1322,7 +1347,7 @@ function RecruiterPage() {
 
   useEffect(() => {
     get("/interviews/all", true)
-      .then(d => setInterviews((d.interviews || []).map(iv => ({ ...iv, score: getInterviewDisplayScore(iv) }))))
+      .then(d => setInterviews((d.interviews || []).map(normalizeInterviewForDisplay)))
       .catch(() => {})
       .finally(() => setFetching(false));
   }, []);
@@ -1693,7 +1718,7 @@ function CandidateDashboard({ user, onStartInterview }) {
 
   useEffect(() => {
     get("/interviews/my", true)
-      .then(d => setInterviews((d.interviews || []).map(iv => ({ ...iv, score: getInterviewDisplayScore(iv) }))))
+      .then(d => setInterviews((d.interviews || []).map(normalizeInterviewForDisplay)))
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);

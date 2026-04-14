@@ -110,6 +110,14 @@ def save_interviews():
 
 INTERVIEWS_DB = load_interviews()
 
+EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
+
+def normalize_email(value: str) -> str:
+    return (value or "").strip().lower()
+
+def is_valid_email(value: str) -> bool:
+    return bool(EMAIL_RE.fullmatch(normalize_email(value)))
+
 
 def get_current_user(authorization: Optional[str] = Header(default=None)):
     if not authorization or not authorization.startswith("Bearer "):
@@ -139,18 +147,21 @@ class LoginRequest(BaseModel):
 # ─── Auth Endpoints ───────────────────────────────────────────────────────────
 @app.post("/auth/signup")
 async def signup(req: SignupRequest):
-    if req.email in USERS_DB:
+    email = normalize_email(req.email)
+    if not is_valid_email(email):
+        raise HTTPException(status_code=400, detail="Enter a valid email address")
+    if email in USERS_DB:
         raise HTTPException(status_code=400, detail="Email already registered")
     uid = "u" + str(uuid.uuid4())[:8]
-    USERS_DB[req.email] = {"id":uid,"name":req.name,"email":req.email,"role":req.role,"pw":hash_pw(req.password)}
+    USERS_DB[email] = {"id":uid,"name":req.name,"email":email,"role":req.role,"pw":hash_pw(req.password)}
     token = str(uuid.uuid4())
     TOKENS_DB[token] = uid
-    u = USERS_DB[req.email]
+    u = USERS_DB[email]
     return {"token": token, "user": {"id":u["id"],"name":u["name"],"email":u["email"],"role":u["role"]}}
 
 @app.post("/auth/login")
 async def login(req: LoginRequest):
-    u = USERS_DB.get(req.email)
+    u = USERS_DB.get(normalize_email(req.email))
     if not u or u["pw"] != hash_pw(req.password):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     token = str(uuid.uuid4())

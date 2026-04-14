@@ -538,6 +538,8 @@ const getCodingAnalysisScore = (analysis) => {
   return partialScores.reduce((sum, value) => sum + value, 0) / partialScores.length;
 };
 
+const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test((value || "").trim());
+
 const getInterviewDisplayScore = (interview) => {
   const savedScore = toFiniteNumber(interview?.score);
   const codingProblems = interview?.coding?.problems || [];
@@ -1538,9 +1540,10 @@ function AuthPage({ onAuth }) {
     try {
       let data;
       if (mode === "signup") {
-        data = await post("/auth/signup", { name, email, password, role });
+        if (!isValidEmail(email)) throw new Error("Enter a valid email address");
+        data = await post("/auth/signup", { name, email: email.trim().toLowerCase(), password, role });
       } else {
-        data = await post("/auth/login", { email, password });
+        data = await post("/auth/login", { email: email.trim().toLowerCase(), password });
       }
       sessionStorage.setItem("token", data.token);
       sessionStorage.setItem("user",  JSON.stringify(data.user));

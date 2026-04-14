@@ -119,6 +119,90 @@ def is_valid_email(value: str) -> bool:
     return bool(EMAIL_RE.fullmatch(normalize_email(value)))
 
 
+def to_number(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def get_recommendation_for_score(score: float) -> str:
+    if score >= 85:
+        return "Strong Hire"
+    if score >= 70:
+        return "Hire"
+    if score >= 50:
+        return "Maybe"
+    return "No Hire"
+
+
+def get_coding_analysis_score(analysis: dict) -> Optional[float]:
+    if not isinstance(analysis, dict):
+        return None
+
+    overall = to_number(analysis.get("overall_score"))
+    if overall is not None:
+        return overall
+
+    parts = [to_number(analysis.get("correctness")), to_number(analysis.get("code_quality"))]
+    parts = [value for value in parts if value is not None]
+    if not parts:
+        return None
+    return sum(parts) / len(parts)
+
+
+def get_coding_output_score(output: str) -> Optional[float]:
+    if not isinstance(output, str) or not output.strip():
+        return None
+
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    test_lines = [line for line in lines if re.search(r"test\s*\d+", line, re.IGNORECASE)]
+    relevant = test_lines or lines
+
+    passed = 0
+    failed = 0
+    for line in relevant:
+        normalized = line.lower()
+        if any(token in normalized for token in ["pass", "passed", "works correctly", "match", "✓"]):
+            passed += 1
+            continue
+        if any(token in normalized for token in ["fail", "failed", "error", "incorrect", "no runnable solution"]):
+            failed += 1
+
+    total = passed + failed
+    if total == 0:
+        return None
+    return (passed / total) * 10
+
+
+def normalize_interview_record(iv: dict) -> dict:
+    if not isinstance(iv, dict):
+        return iv
+
+    coding = iv.get("coding") or {}
+    problems = coding.get("problems") or []
+    total_questions = max(int(to_number(coding.get("total_questions")) or 0), len(problems))
+
+    if not problems or total_questions <= 0:
+        return iv
+
+    scores = []
+    for problem in problems:
+        score = get_coding_analysis_score(problem.get("analysis"))
+        if score is None:
+            score = get_coding_output_score(problem.get("testcase_output"))
+        scores.append(score if score is not None else 0)
+
+    if not any(score > 0 for score in scores):
+        return iv
+
+    derived_score = round((sum(scores) / total_questions) * 10)
+    normalized = dict(iv)
+    normalized["score"] = derived_score
+    normalized["recommendation"] = get_recommendation_for_score(derived_score)
+    return normalized
+
+
 def get_current_user(authorization: Optional[str] = Header(default=None)):
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -215,6 +299,7 @@ async def save_interview(req: SaveInterviewRequest, authorization: Optional[str]
         "qa": req.qa,
         "coding": req.coding,
     }
+    iv = normalize_interview_record(iv)
     INTERVIEWS_DB.append(iv)
     save_interviews()
     return {"id": iv["id"], "ok": True}
@@ -222,7 +307,7 @@ async def save_interview(req: SaveInterviewRequest, authorization: Optional[str]
 @app.get("/interviews/my")
 async def my_interviews(authorization: Optional[str] = Header(default=None)):
     u = get_current_user(authorization)
-    mine = [i for i in INTERVIEWS_DB if i["user_id"] == u["id"]]
+    mine = [normalize_interview_record(i) for i in INTERVIEWS_DB if i["user_id"] == u["id"]]
     return {"interviews": sorted(mine, key=lambda x: x["date"], reverse=True)}
 
 @app.get("/interviews/all")
@@ -230,7 +315,8 @@ async def all_interviews(authorization: Optional[str] = Header(default=None)):
     u = get_current_user(authorization)
     if u["role"] != "hr":
         raise HTTPException(status_code=403, detail="HR access only")
-    return {"interviews": sorted(INTERVIEWS_DB, key=lambda x: x["date"], reverse=True)}
+    normalized = [normalize_interview_record(i) for i in INTERVIEWS_DB]
+    return {"interviews": sorted(normalized, key=lambda x: x["date"], reverse=True)}
 
 async def call_groq(messages: list, max_tokens: int = 1024) -> str:
     if not GROQ_API_KEY:

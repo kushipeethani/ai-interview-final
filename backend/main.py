@@ -95,6 +95,7 @@ SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
 SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL", "").strip() or SMTP_USER
 SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME", "AI Interview")
 SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "true").strip().lower() != "false"
+ALLOW_INSECURE_OTP_RESPONSE = os.getenv("ALLOW_INSECURE_OTP_RESPONSE", "false").strip().lower() == "true"
 
 
 def load_interviews():
@@ -148,9 +149,23 @@ def get_signup_otp_record(email: str) -> Optional[dict]:
     return record
 
 
+def is_smtp_configured() -> bool:
+    return bool(SMTP_HOST and SMTP_FROM_EMAIL)
+
+
+def build_otp_config_error() -> HTTPException:
+    return HTTPException(
+        status_code=500,
+        detail=(
+            "OTP email delivery is not configured on the server. "
+            "Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, and SMTP_FROM_EMAIL."
+        ),
+    )
+
+
 def send_signup_otp_email(recipient_email: str, otp: str) -> None:
-    if not SMTP_HOST or not SMTP_FROM_EMAIL:
-        raise HTTPException(status_code=500, detail="OTP email delivery is not configured on the server")
+    if not is_smtp_configured():
+        raise build_otp_config_error()
 
     message = EmailMessage()
     message["Subject"] = "Your AI Interview signup OTP"
@@ -323,8 +338,16 @@ async def request_signup_otp(req: SignupOtpRequest):
         "otp": otp,
         "expires_at": utc_now() + timedelta(minutes=OTP_EXPIRY_MINUTES),
     }
-    send_signup_otp_email(email, otp)
-    return {"ok": True, "message": f"OTP sent to {email}"}
+    if is_smtp_configured():
+        send_signup_otp_email(email, otp)
+        return {"ok": True, "message": f"OTP sent to {email}"}
+    if ALLOW_INSECURE_OTP_RESPONSE:
+        return {
+            "ok": True,
+            "message": "SMTP is not configured. Returning OTP directly because ALLOW_INSECURE_OTP_RESPONSE=true.",
+            "dev_otp": otp,
+        }
+    raise build_otp_config_error()
 
 
 @app.post("/auth/signup")

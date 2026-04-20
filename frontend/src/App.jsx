@@ -1635,7 +1635,7 @@ function AuthPage({ onAuth }) {
     try {
       const data = await post("/auth/request-signup-otp", { email: normalizedEmail });
       setOtpSent(true);
-      setOtpStatus(data.message || "OTP sent to your email");
+      setOtpStatus(data.dev_otp ? `${data.message} OTP: ${data.dev_otp}` : (data.message || "OTP sent to your email"));
     } catch (e) {
       setError(e.message);
     } finally {

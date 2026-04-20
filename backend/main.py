@@ -8,6 +8,11 @@ import httpx
 import os
 import json
 import re
+import random
+import smtplib
+import ssl
+from datetime import datetime, timedelta, timezone
+from email.message import EmailMessage
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -77,20 +82,19 @@ USERS_DB = {
     "candidate@demo.com": {"id":"u2","name":"Demo Candidate","email":"candidate@demo.com","role":"candidate","pw":hash_pw("candidate123")},
 }
 TOKENS_DB = {}  # token -> user_id
+SIGNUP_OTP_DB = {}  # email -> {"otp": str, "expires_at": datetime}
 
 INTERVIEWS_DB_FILE = Path(__file__).with_name("interviews_db.json")
-DEFAULT_INTERVIEWS = [
-    {"id":"i1","user_id":"u2","name":"Demo Candidate","role":"Software Engineer","date":"2024-01-10","score":78,
-     "recommendation":"Hire","skills":["React","Python","System Design"],
-     "summary":"Strong frontend knowledge. Needs improvement in distributed systems.",
-     "strengths":["Clear communication","Good React depth"],"improvements":["System design gaps"],
-     "scores":{"technical_knowledge":8,"problem_solving":7,"communication_skills":9,"project_understanding":7,"confidence":8}},
-    {"id":"i2","user_id":"u2","name":"Demo Candidate","role":"Backend Engineer","date":"2024-01-15","score":85,
-     "recommendation":"Strong Hire","skills":["Python","FastAPI","SQL"],
-     "summary":"Excellent backend fundamentals. Confident and articulate.",
-     "strengths":["Deep Python knowledge","Excellent problem solving"],"improvements":["Leadership examples sparse"],
-     "scores":{"technical_knowledge":9,"problem_solving":9,"communication_skills":8,"project_understanding":8,"confidence":9}},
-]
+DEFAULT_INTERVIEWS = []
+
+OTP_EXPIRY_MINUTES = max(int(os.getenv("SIGNUP_OTP_TTL_MINUTES", "10")), 1)
+SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587") or "587")
+SMTP_USER = os.getenv("SMTP_USER", "").strip()
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL", "").strip() or SMTP_USER
+SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME", "AI Interview")
+SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "true").strip().lower() != "false"
 
 
 def load_interviews():
@@ -117,6 +121,64 @@ def normalize_email(value: str) -> str:
 
 def is_valid_email(value: str) -> bool:
     return bool(EMAIL_RE.fullmatch(normalize_email(value)))
+
+
+def has_special_character(value: str) -> bool:
+    return bool(re.search(r"[^A-Za-z0-9]", value or ""))
+
+
+def validate_signup_password(value: str) -> None:
+    if not (value or "").strip():
+        raise HTTPException(status_code=400, detail="Password is required")
+    if not has_special_character(value):
+        raise HTTPException(status_code=400, detail="Password must include at least 1 special character")
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def get_signup_otp_record(email: str) -> Optional[dict]:
+    record = SIGNUP_OTP_DB.get(email)
+    if not record:
+        return None
+    if record["expires_at"] <= utc_now():
+        SIGNUP_OTP_DB.pop(email, None)
+        return None
+    return record
+
+
+def send_signup_otp_email(recipient_email: str, otp: str) -> None:
+    if not SMTP_HOST or not SMTP_FROM_EMAIL:
+        raise HTTPException(status_code=500, detail="OTP email delivery is not configured on the server")
+
+    message = EmailMessage()
+    message["Subject"] = "Your AI Interview signup OTP"
+    message["From"] = f"{SMTP_FROM_NAME} <{SMTP_FROM_EMAIL}>"
+    message["To"] = recipient_email
+    message.set_content(
+        "\n".join([
+            "Your AI Interview signup OTP is:",
+            otp,
+            "",
+            f"It expires in {OTP_EXPIRY_MINUTES} minutes.",
+            "If you did not request this, you can ignore this email.",
+        ])
+    )
+
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
+            server.ehlo()
+            if SMTP_USE_TLS:
+                server.starttls(context=ssl.create_default_context())
+                server.ehlo()
+            if SMTP_USER and SMTP_PASSWORD:
+                server.login(SMTP_USER, SMTP_PASSWORD)
+            server.send_message(message)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Unable to send OTP email right now") from exc
 
 
 def to_number(value):
@@ -236,7 +298,11 @@ class SignupRequest(BaseModel):
     name: str
     email: str
     password: str
+    otp: str
     role: str = "candidate"
+
+class SignupOtpRequest(BaseModel):
+    email: str
 
 class LoginRequest(BaseModel):
     email: str
@@ -244,15 +310,44 @@ class LoginRequest(BaseModel):
 
 
 # ─── Auth Endpoints ───────────────────────────────────────────────────────────
-@app.post("/auth/signup")
-async def signup(req: SignupRequest):
+@app.post("/auth/request-signup-otp")
+async def request_signup_otp(req: SignupOtpRequest):
     email = normalize_email(req.email)
     if not is_valid_email(email):
         raise HTTPException(status_code=400, detail="Enter a valid email address")
     if email in USERS_DB:
         raise HTTPException(status_code=400, detail="Email already registered")
+
+    otp = f"{random.randint(0, 999999):06d}"
+    SIGNUP_OTP_DB[email] = {
+        "otp": otp,
+        "expires_at": utc_now() + timedelta(minutes=OTP_EXPIRY_MINUTES),
+    }
+    send_signup_otp_email(email, otp)
+    return {"ok": True, "message": f"OTP sent to {email}"}
+
+
+@app.post("/auth/signup")
+async def signup(req: SignupRequest):
+    email = normalize_email(req.email)
+    name = (req.name or "").strip()
+    if not is_valid_email(email):
+        raise HTTPException(status_code=400, detail="Enter a valid email address")
+    if not name:
+        raise HTTPException(status_code=400, detail="Full name is required")
+    if email in USERS_DB:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    validate_signup_password(req.password)
+
+    otp_record = get_signup_otp_record(email)
+    if not otp_record:
+        raise HTTPException(status_code=400, detail="Request a new OTP to continue signup")
+    if (req.otp or "").strip() != otp_record["otp"]:
+        raise HTTPException(status_code=400, detail="Invalid OTP")
+
     uid = "u" + str(uuid.uuid4())[:8]
-    USERS_DB[email] = {"id":uid,"name":req.name,"email":email,"role":req.role,"pw":hash_pw(req.password)}
+    USERS_DB[email] = {"id":uid,"name":name,"email":email,"role":req.role,"pw":hash_pw(req.password)}
+    SIGNUP_OTP_DB.pop(email, None)
     token = str(uuid.uuid4())
     TOKENS_DB[token] = uid
     u = USERS_DB[email]

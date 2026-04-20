@@ -617,6 +617,7 @@ const getCodingOutputScore = (output) => {
 };
 
 const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test((value || "").trim());
+const hasSpecialCharacter = (value) => /[^A-Za-z0-9]/.test(value || "");
 
 const getRecommendationForScore = (score) => {
   if (score >= 75) return "Strong Hire";
@@ -661,27 +662,29 @@ const normalizeInterviewForDisplay = (interview) => {
 };
 
 function CodingInterviewMode() {
-  const currentUser = getUser();
   const [problemIdx, setProblemIdx] = useState(0);
   const [language, setLanguage] = useState("javascript");
-  const [code, setCode] = useState(CODING_PROBLEMS[0].starterCode);
+  const [code, setCode] = useState("");
   const [output, setOutput] = useState("");
-  const [analysis, setAnalysis] = useState(null);
+  const [analysis] = useState(null);
   const [isRunning, setIsRunning] = useState(false);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [isGenerating, setIsGenerating] = useState(false);
+  const [isAnalyzing] = useState(false);
+  const [isGenerating] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [tab, setTab] = useState("problem");
-  const [resumeText, setResumeText] = useState("");
-  const [aiProblems, setAiProblems] = useState([]);
+  const [tab] = useState("problem");
+  const [resumeText] = useState("");
   const [codingRecords, setCodingRecords] = useState({});
   const [codingProctoring, setCodingProctoring] = useState({ tabSwitches: 0, faceNotDetected: 0, multipleFaces: 0, voiceDetections: 0 });
-  const fileRef = useRef();
-  const sessionSeedRef = useRef(Date.now());
+  const fileRef = useRef(null);
 
-  const allProblems = aiProblems.length > 0 ? aiProblems : COMPANY_STYLE_CODING_PROBLEMS;
-  const problem = allProblems[problemIdx] || COMPANY_STYLE_CODING_PROBLEMS[0];
+  const setTab = () => {};
+  const handleResumeUpload = () => {};
+  const generateProblems = () => {};
+  const analyzeCode = () => {};
+
+  const allProblems = COMPANY_STYLE_CODING_PROBLEMS;
+  const problem = allProblems[problemIdx] || allProblems[0];
   const isLastProblem = problemIdx >= allProblems.length - 1;
 
   const saveProblemState = useCallback((problemData, next = {}) => {
@@ -697,71 +700,22 @@ function CodingInterviewMode() {
         language,
         code,
         output,
-        analysis,
         ...prev[problemData.title],
         ...next,
       },
     }));
-  }, [analysis, code, language, output]);
+  }, [code, language, output]);
 
   // When language or problem changes, update starter code
   useEffect(() => {
+    if (!problem) return;
     const fnName = problem.title.replace(/\s+/g,"").replace(/[^a-zA-Z0-9]/g,"");
     const langCfg = LANGUAGES[language];
     const starter = langCfg.starter(fnName.charAt(0).toLowerCase()+fnName.slice(1));
     const existing = codingRecords[problem.title];
     setCode(existing?.code || starter);
     setOutput(existing?.output || "");
-    setAnalysis(existing?.analysis || null);
-    setTab("problem");
-  }, [problemIdx, language, problem.title, codingRecords]);
-
-  // Upload resume for AI problem generation
-  const handleResumeUpload = async e => {
-    const f = e.target.files[0]; if (!f) return;
-    try {
-      const formData = new FormData();
-      formData.append("file", f);
-      const res = await fetch(`${API}/parse-resume`, { method:"POST", body:formData });
-      const data = await res.json();
-      setResumeText(data.text || "");
-    } catch {}
-  };
-
-  // Generate coding problems based on resume using AI
-  const generateProblems = async () => {
-    setIsGenerating(true);
-    try {
-      const prompt = resumeText
-        ? `Candidate: ${currentUser?.name || "Unknown Candidate"}.
-Create a fresh coding round seed ${sessionSeedRef.current}.
-Based on this resume, generate exactly 3 coding interview problems suited for the candidate's background. The mix must be 2 Easy and 1 Medium. Make them feel like real company hiring questions, not only array problems. Cover diverse areas such as strings, stacks, heaps, trees, graphs, intervals, SQL-style reasoning, design, or scheduling when relevant. Avoid repeating common stock sets:\n${resumeText.slice(0,1500)}`
-        : `Candidate: ${currentUser?.name || "Unknown Candidate"}.
-Create a fresh coding round seed ${sessionSeedRef.current}.
-Generate exactly 3 diverse coding interview problems for this candidate. The mix must be 2 Easy and 1 Medium. Make them feel like real company hiring questions and avoid making all of them array-based. Cover different areas such as strings, stacks, heaps, trees, graphs, intervals, design, or scheduling.`;
-      const data = await post("/generate-coding-problems", { prompt, language });
-      if (data.problems && data.problems.length > 0) {
-        setAiProblems(data.problems);
-        setProblemIdx(0);
-        setCodingRecords({});
-        setSaved(false);
-      }
-    } catch {
-      const fallback = [
-        COMPANY_STYLE_CODING_PROBLEMS.find(p => p.difficulty === "Easy"),
-        COMPANY_STYLE_CODING_PROBLEMS.filter(p => p.difficulty === "Easy")[1],
-        COMPANY_STYLE_CODING_PROBLEMS.find(p => p.difficulty === "Medium"),
-      ].filter(Boolean);
-      setAiProblems(fallback);
-      setProblemIdx(0);
-      setCodingRecords({});
-      setSaved(false);
-    } finally { setIsGenerating(false); }
-  };
-
-  useEffect(() => {
-    generateProblems();
-  }, []);
+  }, [codingRecords, language, problem]);
 
   const runCode = async () => {
     setIsRunning(true); setOutput("");
@@ -771,20 +725,6 @@ Generate exactly 3 diverse coding interview problems for this candidate. The mix
       saveProblemState(problem, { code, output: data.output });
     } catch (e) { setOutput("Error: " + e.message); }
     finally { setIsRunning(false); }
-  };
-
-  const analyzeCode = async () => {
-    setIsAnalyzing(true); setAnalysis(null);
-    try {
-      const data = await post("/analyze-code", { problem_title: problem.title, code, examples: problem.examples, language });
-      setAnalysis(data); setTab("analysis");
-      saveProblemState(problem, { code, analysis: data });
-    } catch {
-      const fallbackAnalysis = { time_complexity:"O(?)", space_complexity:"O(?)", correctness:5, code_quality:5, bugs:[], suggestions:["Submit valid code"], overall_score:5, verdict:"Acceptable" };
-      setAnalysis(fallbackAnalysis);
-      setTab("analysis");
-      saveProblemState(problem, { code, analysis: fallbackAnalysis });
-    } finally { setIsAnalyzing(false); }
   };
 
   const saveCodingRound = async () => {
@@ -801,16 +741,16 @@ Generate exactly 3 diverse coding interview problems for this candidate. The mix
         language: record.language || language,
         code: record.code || "",
         testcase_output: record.output || "",
-        analysis: record.analysis || null,
+        analysis: null,
       };
     });
 
-    const completed = problems.filter(p => p.code || p.testcase_output || p.analysis);
+    const completed = problems.filter(p => p.code || p.testcase_output);
     if (!completed.length) return;
 
     const totalQuestions = Math.max(allProblems.length, problems.length);
     const totalScore = problems.reduce(
-      (sum, p) => sum + (getCodingAnalysisScore(p.analysis) ?? getCodingOutputScore(p.testcase_output) ?? 0),
+      (sum, p) => sum + (getCodingOutputScore(p.testcase_output) ?? 0),
       0
     );
     const avgScore = Math.round((totalScore / totalQuestions) * 10);
@@ -845,7 +785,7 @@ Generate exactly 3 diverse coding interview problems for this candidate. The mix
 
   const goToNextProblem = () => {
     if (isLastProblem) return;
-    saveProblemState(problem, { code, output, analysis });
+    saveProblemState(problem, { code, output });
     setProblemIdx(idx => Math.min(idx + 1, allProblems.length - 1));
     setSaved(false);
   };
@@ -879,27 +819,22 @@ Generate exactly 3 diverse coding interview problems for this candidate. The mix
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16, flexWrap:"wrap", gap:10 }}>
         <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
           {allProblems.map((p,i) => (
-            <button key={i} onClick={() => { saveProblemState(problem); setProblemIdx(i); }} className="btn btn-ghost"
+            <button key={i} onClick={() => { saveProblemState(problem, { code, output }); setProblemIdx(i); setSaved(false); }} className="btn btn-ghost"
               style={{ background:problemIdx===i?"rgba(99,102,241,.15)":undefined, border:problemIdx===i?"1px solid rgba(99,102,241,.35)":undefined, color:problemIdx===i?"#818cf8":"#a1a1aa", fontSize:12 }}>
-              {p.title} <span style={{ fontSize:9, padding:"1px 5px", borderRadius:4, background:`${diffColor[p.difficulty]||"#6366f1"}18`, color:diffColor[p.difficulty]||"#818cf8" }}>{p.difficulty||"AI"}</span>
+              {p.title} <span style={{ fontSize:9, padding:"1px 5px", borderRadius:4, background:`${diffColor[p.difficulty]||"#6366f1"}18`, color:diffColor[p.difficulty]||"#818cf8" }}>{p.difficulty}</span>
             </button>
           ))}
         </div>
-        <div style={{ display:"flex", gap:8, alignItems:"center" }}>
-          <input ref={fileRef} type="file" accept=".pdf,.txt" style={{ display:"none" }} onChange={handleResumeUpload}/>
-          <button className="btn btn-ghost" style={{ fontSize:11 }} onClick={() => fileRef.current?.click()}>
-            📄 {resumeText?"Resume loaded":"Upload Resume"}
-          </button>
-          <button className="btn btn-primary" style={{ fontSize:11 }} onClick={generateProblems} disabled={isGenerating}>
-            {isGenerating?<><Icons.Spin/>Generating…</>:"🤖 AI Generate Problems"}
-          </button>
+        <div style={{ display:"none", fontSize:12, color:"#71717a" }}>
+          Prepared coding set only. Run your code and submit the round when you finish.
+          Prepared coding set only. Run your code and submit the round when you finish.
         </div>
       </div>
 
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1.2fr 280px", gap:16, alignItems:"start" }}>
         <div>
           <div style={{ display:"flex", gap:1, marginBottom:12, background:"rgba(255,255,255,.03)", borderRadius:9, padding:3, border:"1px solid rgba(255,255,255,.07)" }}>
-            {["problem","analysis"].map(t => (
+            {["problem"].map(t => (
               <button key={t} onClick={() => setTab(t)} style={{ flex:1, padding:"7px 0", fontSize:12, borderRadius:7, border:"none", cursor:"pointer", textTransform:"capitalize", background:tab===t?"#6366f1":"transparent", color:tab===t?"#fff":"#52525b", transition:"all .15s", fontFamily:"inherit" }}>{t}</button>
             ))}
           </div>
@@ -907,7 +842,7 @@ Generate exactly 3 diverse coding interview problems for this candidate. The mix
             <div className="card">
               <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:10 }}>
                 <h3 style={{ fontSize:15, fontWeight:700 }}>{problem.title}</h3>
-                <span style={{ padding:"2px 8px", borderRadius:6, fontSize:11, background:`${diffColor[problem.difficulty]||"#6366f1"}18`, color:diffColor[problem.difficulty]||"#818cf8", fontWeight:600 }}>{problem.difficulty||"Custom"}</span>
+                <span style={{ padding:"2px 8px", borderRadius:6, fontSize:11, background:`${diffColor[problem.difficulty]||"#6366f1"}18`, color:diffColor[problem.difficulty]||"#818cf8", fontWeight:600 }}>{problem.difficulty}</span>
               </div>
               <div style={{ display:"flex", gap:5, marginBottom:10, flexWrap:"wrap" }}>{(problem.tags||[]).map(t => <span key={t} className="tag">{t}</span>)}</div>
               <p style={{ fontSize:13, color:"#a1a1aa", lineHeight:1.65, marginBottom:12 }}>{problem.description}</p>
@@ -949,7 +884,7 @@ Generate exactly 3 diverse coding interview problems for this candidate. The mix
             </div>
             <div style={{ display:"flex", gap:8 }}>
               <button className="btn btn-ghost" style={{ fontSize:12 }} onClick={runCode} disabled={isRunning}>{isRunning?<><Icons.Spin/>Running…</>:<><Icons.Play/>Run</>}</button>
-              <button className="btn btn-primary" style={{ fontSize:12 }} onClick={analyzeCode} disabled={isAnalyzing}>{isAnalyzing?<><Icons.Spin/>Analyzing…</>:"AI Analyze →"}</button>
+              <button className="btn btn-primary" style={{ display:"none", fontSize:12 }} onClick={analyzeCode} disabled={isAnalyzing}>{isAnalyzing?<><Icons.Spin/>Analyzing…</>:"AI Analyze →"}</button>
             </div>
           </div>
           <textarea className="code-editor" value={code} onChange={e => { setCode(e.target.value); setSaved(false); }}
@@ -1344,7 +1279,7 @@ function InterviewPage({ onFinish }) {
 }
 
 // ─── Landing Page ─────────────────────────────────────────────────────────────
-function LandingPage({ onStart, onGoToRecruiter, onGoToCoding }) {
+function LandingPage({ onStart, onGoToCoding }) {
   return (
     <main style={{ maxWidth:1100, margin:"0 auto", padding:"48px 20px 80px" }}>
       <div style={{ display:"grid", gridTemplateColumns:"1.2fr 1fr", gap:22, alignItems:"start" }}>
@@ -1361,14 +1296,13 @@ function LandingPage({ onStart, onGoToRecruiter, onGoToCoding }) {
           <div style={{ display:"flex", gap:10, flexWrap:"wrap", marginBottom:28 }}>
             <button className="btn btn-primary" style={{ fontSize:14, padding:"11px 26px" }} onClick={onStart}>Start Interview <Icons.Arrow/></button>
             <button className="btn btn-ghost" style={{ fontSize:14 }} onClick={onGoToCoding}><Icons.Code/> Coding</button>
-            <button className="btn btn-ghost" style={{ fontSize:14 }} onClick={onGoToRecruiter}><Icons.Chart/> Recruiter</button>
           </div>
           <div style={{ display:"grid", gridTemplateColumns:"repeat(2,1fr)", gap:8 }}>
             {[
               { icon:<Icons.Shield/>, c:"#f59e0b", t:"Anti-Cheat Proctoring", d:"Webcam + tab detection" },
               { icon:<Icons.Chart/>, c:"#6366f1", t:"Weighted Evaluation", d:"5 metrics, professional scoring" },
               { icon:<Icons.Database/>, c:"#06b6d4", t:"RAG Knowledge Base", d:"Python-powered semantic search" },
-              { icon:<Icons.Terminal/>, c:"#8b5cf6", t:"Coding Interview", d:"Run code + AI analysis" },
+              { icon:<Icons.Terminal/>, c:"#8b5cf6", t:"Coding Interview", d:"Run code + submit results" },
             ].map(f => (
               <div key={f.t} style={{ padding:"11px 13px", borderRadius:9, background:"rgba(0,0,0,.25)", border:"1px solid rgba(255,255,255,.07)" }}>
                 <div style={{ display:"flex", alignItems:"center", gap:6, color:f.c, marginBottom:4 }}>{f.icon}<span style={{ fontSize:12, fontWeight:600 }}>{f.t}</span></div>
@@ -1663,17 +1597,63 @@ function AuthPage({ onAuth }) {
   const [email, setEmail]       = useState("");
   const [password, setPassword] = useState("");
   const [name, setName]         = useState("");
+  const [otp, setOtp]           = useState("");
   const [showPw, setShowPw]     = useState(false);
   const [error, setError]       = useState("");
+  const [otpStatus, setOtpStatus] = useState("");
+  const [otpSent, setOtpSent]   = useState(false);
   const [loading, setLoading]   = useState(false);
+  const [sendingOtp, setSendingOtp] = useState(false);
+
+  const resetOtpState = () => {
+    setOtp("");
+    setOtpSent(false);
+    setOtpStatus("");
+  };
+
+  const handleModeChange = (nextMode) => {
+    setMode(nextMode);
+    setError("");
+    if (nextMode !== "signup") resetOtpState();
+  };
+
+  const handleEmailChange = (value) => {
+    setEmail(value);
+    if (mode === "signup") resetOtpState();
+  };
+
+  async function handleSendOtp() {
+    const normalizedEmail = email.trim().toLowerCase();
+    setError("");
+    setOtpStatus("");
+    if (!isValidEmail(normalizedEmail)) {
+      setError("Enter a valid email address");
+      return;
+    }
+
+    setSendingOtp(true);
+    try {
+      const data = await post("/auth/request-signup-otp", { email: normalizedEmail });
+      setOtpSent(true);
+      setOtpStatus(data.message || "OTP sent to your email");
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSendingOtp(false);
+    }
+  }
 
   async function handleSubmit() {
     setError(""); setLoading(true);
     try {
       let data;
       if (mode === "signup") {
-        if (!isValidEmail(email)) throw new Error("Enter a valid email address");
-        data = await post("/auth/signup", { name, email: email.trim().toLowerCase(), password, role });
+        const normalizedEmail = email.trim().toLowerCase();
+        if (!name.trim()) throw new Error("Enter your full name");
+        if (!isValidEmail(normalizedEmail)) throw new Error("Enter a valid email address");
+        if (!hasSpecialCharacter(password)) throw new Error("Password must include at least 1 special character");
+        if (!otp.trim()) throw new Error("Enter the OTP sent to your email");
+        data = await post("/auth/signup", { name: name.trim(), email: normalizedEmail, password, otp: otp.trim(), role });
       } else {
         data = await post("/auth/login", { email: email.trim().toLowerCase(), password });
       }
@@ -1683,8 +1663,6 @@ function AuthPage({ onAuth }) {
     } catch (e) { setError(e.message); }
     finally { setLoading(false); }
   }
-
-  const fill = (e, p) => { setEmail(e); setPassword(p); };
 
   return (
     <div style={{ minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}>
@@ -1702,7 +1680,7 @@ function AuthPage({ onAuth }) {
           {/* Tabs */}
           <div style={{ display:"flex", gap:0, marginBottom:24, borderRadius:10, background:"rgba(255,255,255,.04)", padding:3 }}>
             {[["signin","Sign In"],["signup","Sign Up"]].map(([k,l]) => (
-              <button key={k} onClick={() => { setMode(k); setError(""); }}
+              <button key={k} onClick={() => handleModeChange(k)}
                 style={{ flex:1, padding:"8px 0", borderRadius:8, border:"none", cursor:"pointer", fontSize:13, fontWeight:700,
                   background: mode===k ? "rgba(99,102,241,.25)" : "transparent",
                   color: mode===k ? "#818cf8" : "#71717a" }}>
@@ -1712,10 +1690,10 @@ function AuthPage({ onAuth }) {
           </div>
 
           {/* Role selector */}
-          <div style={{ marginBottom:16 }}>
-            <label style={{ fontSize:11, fontWeight:700, color:"#a1a1aa", display:"block", marginBottom:6 }}>I AM A</label>
+          {mode==="signup" && <div style={{ marginBottom:16 }}>
+            <label style={{ fontSize:11, fontWeight:700, color:"#a1a1aa", display:"block", marginBottom:6 }}>ACCOUNT TYPE *</label>
             <div style={{ display:"flex", gap:8 }}>
-              {[["candidate","🎯 Candidate"],["hr","👔 HR / Recruiter"]].map(([k,l]) => (
+              {[["candidate","Candidate"],["hr","HR"]].map(([k,l]) => (
                 <button key={k} onClick={() => setRole(k)}
                   style={{ flex:1, padding:"10px 0", borderRadius:9, border:`1.5px solid ${role===k?"rgba(99,102,241,.6)":"rgba(255,255,255,.08)"}`,
                     background: role===k ? "rgba(99,102,241,.14)" : "rgba(255,255,255,.02)",
@@ -1724,25 +1702,32 @@ function AuthPage({ onAuth }) {
                 </button>
               ))}
             </div>
-          </div>
+          </div>}
 
           {/* Name (signup only) */}
           {mode==="signup" && (
             <div style={{ marginBottom:14 }}>
-              <label style={{ fontSize:11, fontWeight:700, color:"#a1a1aa", display:"block", marginBottom:6 }}>FULL NAME</label>
+              <label style={{ fontSize:11, fontWeight:700, color:"#a1a1aa", display:"block", marginBottom:6 }}>FULL NAME *</label>
               <input className="input" placeholder="Jane Smith" value={name} onChange={e => setName(e.target.value)} style={{ width:"100%" }}/>
             </div>
           )}
 
           {/* Email */}
           <div style={{ marginBottom:14 }}>
-            <label style={{ fontSize:11, fontWeight:700, color:"#a1a1aa", display:"block", marginBottom:6 }}>EMAIL</label>
-            <input className="input" type="email" placeholder="you@example.com" value={email} onChange={e => setEmail(e.target.value)} style={{ width:"100%" }}/>
+            <label style={{ fontSize:11, fontWeight:700, color:"#a1a1aa", display:"block", marginBottom:6 }}>EMAIL {mode==="signup" ? "*" : ""}</label>
+            <div style={{ display:"flex", gap:8 }}>
+              <input className="input" type="email" placeholder="you@example.com" value={email} onChange={e => handleEmailChange(e.target.value)} style={{ width:"100%" }}/>
+              {mode==="signup" && (
+                <button className="btn btn-ghost" type="button" onClick={handleSendOtp} disabled={sendingOtp} style={{ padding:"0 12px", fontSize:11 }}>
+                  {sendingOtp ? <Icons.Spin size={14}/> : otpSent ? "Resend OTP" : "Send OTP"}
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Password */}
-          <div style={{ marginBottom:20 }}>
-            <label style={{ fontSize:11, fontWeight:700, color:"#a1a1aa", display:"block", marginBottom:6 }}>PASSWORD</label>
+          <div style={{ marginBottom:mode==="signup" ? 14 : 20 }}>
+            <label style={{ fontSize:11, fontWeight:700, color:"#a1a1aa", display:"block", marginBottom:6 }}>PASSWORD {mode==="signup" ? "*" : ""}</label>
             <div style={{ position:"relative" }}>
               <input className="input" type={showPw?"text":"password"} placeholder="••••••••" value={password}
                 onChange={e => setPassword(e.target.value)} onKeyDown={e => e.key==="Enter"&&handleSubmit()}
@@ -1754,6 +1739,17 @@ function AuthPage({ onAuth }) {
             </div>
           </div>
 
+          {mode==="signup" && (
+            <div style={{ marginBottom:20 }}>
+              <label style={{ fontSize:11, fontWeight:700, color:"#a1a1aa", display:"block", marginBottom:6 }}>EMAIL OTP *</label>
+              <input className="input" placeholder="Enter 6-digit OTP" value={otp}
+                onChange={e => setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                onKeyDown={e => e.key==="Enter"&&handleSubmit()}
+                style={{ width:"100%", letterSpacing:"0.24em" }}/>
+              {otpStatus && <p style={{ marginTop:6, fontSize:11, color:"#818cf8" }}>{otpStatus}</p>}
+            </div>
+          )}
+          {mode==="signup" && <p style={{ marginTop:-8, marginBottom:14, fontSize:11, color:"#71717a" }}>Password must include at least 1 special character.</p>}
           {error && <div style={{ marginBottom:14, padding:"9px 13px", borderRadius:8, background:"rgba(239,68,68,.1)", border:"1px solid rgba(239,68,68,.25)", color:"#f87171", fontSize:13 }}>{error}</div>}
 
           <button className="btn btn-primary" onClick={handleSubmit} disabled={loading} style={{ width:"100%", padding:"11px 0", fontSize:14 }}>
@@ -1761,7 +1757,7 @@ function AuthPage({ onAuth }) {
           </button>
 
           {/* Demo accounts */}
-          <div style={{ marginTop:18, borderTop:"1px solid rgba(255,255,255,.07)", paddingTop:14 }}>
+          <div style={{ display:"none", marginTop:18, borderTop:"1px solid rgba(255,255,255,.07)", paddingTop:14 }}>
             <p style={{ fontSize:11, color:"#52525b", marginBottom:8, textAlign:"center" }}>DEMO ACCOUNTS</p>
             <div style={{ display:"flex", gap:8 }}>
               <button onClick={() => fill("candidate@demo.com","candidate123")}
@@ -1949,14 +1945,14 @@ export default function App() {
         </div>
       </header>
 
-      {page==="home"      && user.role!=="hr" && <LandingPage onStart={() => setPage("interview")} onGoToRecruiter={() => setPage("recruiter")} onGoToCoding={() => setPage("coding")}/>}
+      {page==="home"      && user.role!=="hr" && <LandingPage onStart={() => setPage("interview")} onGoToCoding={() => setPage("coding")}/>}
       {page==="interview" && user.role!=="hr" && <InterviewPage onFinish={() => setPage("dashboard")}/>}
       {page==="dashboard" && user.role!=="hr" && <CandidateDashboard user={user} onStartInterview={() => setPage("interview")}/>}
       {page==="coding"    && user.role!=="hr" && (
         <main style={{ maxWidth:1100, margin:"0 auto", padding:"36px 20px 80px" }}>
           <div style={{ marginBottom:22 }}>
             <h2 style={{ fontSize:22, fontWeight:800, marginBottom:4 }}>Coding Interview Mode</h2>
-            <p style={{ color:"#a1a1aa", fontSize:13 }}>Solve problems, run code, get AI analysis</p>
+            <p style={{ color:"#a1a1aa", fontSize:13 }}>Solve problems, run code, and submit results</p>
           </div>
           <CodingInterviewMode/>
         </main>

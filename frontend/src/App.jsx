@@ -2,7 +2,8 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { FaceDetector as MediaPipeFaceDetector, FilesetResolver } from "@mediapipe/tasks-vision";
 
 // ─── Backend API Base URL ────────────────────────────────────────────────────
-const API = (import.meta.env.VITE_API_BASE_URL || "http://localhost:8000").replace(/\/$/, "");
+const DEFAULT_API = import.meta.env.PROD ? "https://ai-interview-backend.onrender.com" : "http://localhost:8000";
+const API = (import.meta.env.VITE_API_BASE_URL || DEFAULT_API).replace(/\/$/, "");
 // ─── Token helpers ───────────────────────────────────────────────────────────
 const getToken = () => sessionStorage.getItem("token");
 const getUser  = () => { try { return JSON.parse(sessionStorage.getItem("user")||"null"); } catch { return null; } };

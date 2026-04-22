@@ -32,4 +32,4 @@ services:
     publishPath: dist
     envVars:
       - key: VITE_API_BASE_URL
-        sync: false
+        value: https://ai-interview-backend.onrender.com

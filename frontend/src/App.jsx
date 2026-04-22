@@ -1777,7 +1777,7 @@ function AuthPage({ onAuth }) {
 
         <div className="card" style={{ border:"1px solid rgba(99,102,241,.25)", padding:28 }}>
           <div style={{ display:"flex", gap:0, marginBottom:24, borderRadius:10, background:"rgba(255,255,255,.04)", padding:3 }}>
-            {[ ["signin","Sign In"], ["signup","Sign Up"], ["forgot","Forgot Password"] ].map(([k,l]) => (
+            {[ ["signin","Sign In"], ["signup","Sign Up"] ].map(([k,l]) => (
               <button key={k} onClick={() => handleModeChange(k)}
                 style={{ flex:1, padding:"8px 0", borderRadius:8, border:"none", cursor:"pointer", fontSize:13, fontWeight:700,
                   background: mode===k ? "rgba(99,102,241,.25)" : "transparent",

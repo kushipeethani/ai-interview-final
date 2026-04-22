@@ -622,9 +622,9 @@ const hasSpecialCharacter = (value) => /[^A-Za-z0-9]/.test(value || "");
 
 const getRecommendationForScore = (score) => {
   const normalized = normalizeScoreToPercent(score);
-  if (normalized >= 75) return "Strong Hire";
-  if (normalized >= 50) return "Hire";
-  if (normalized >= 40) return "Maybe";
+  if (normalized >= 80) return "Strong Hire";
+  if (normalized >= 60) return "Hire";
+  if (normalized >= 50) return "Maybe Hire";
   return "No Hire";
 };
 
@@ -1109,7 +1109,7 @@ function InterviewPage({ onFinish }) {
     if (!transcript.trim()) return;
     stopListening(); setIsLoading(true);
     try {
-      const fb = await post("/evaluate-answer", { role, question: questions[currentQ], answer: transcript });
+      const fb = await post("/evaluate-answer", { role, question: questions[currentQ], answer: transcript, resume_text: resumeText });
       const nextAnswers = [...answers, { q: questions[currentQ], a: transcript, ...fb }];
       setAnswers(nextAnswers);
       setTranscript("");
@@ -1147,7 +1147,7 @@ function InterviewPage({ onFinish }) {
   const generateReport = async (allAnswers) => {
     setIsLoading(true);
     try {
-      const data = await post("/generate-report", { role, answers: allAnswers });
+      const data = await post("/generate-report", { role, answers: allAnswers, resume_text: resumeText });
       setReport(data);
     } catch {
       setReport({
@@ -1264,7 +1264,6 @@ function InterviewPage({ onFinish }) {
   }
 
   if (step === "done") {
-    const recColor = { "Strong Hire":"#22c55e","Hire":"#06b6d4","Maybe":"#f59e0b","No Hire":"#ef4444" }[report?.recommendation]||"#818cf8";
     return (
       <main style={{ maxWidth:760, margin:"0 auto", padding:"36px 20px 80px" }}>
         {isLoading?(
@@ -1273,12 +1272,12 @@ function InterviewPage({ onFinish }) {
           <>
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:22 }}>
               <div>
-                <h2 style={{ fontSize:24, fontWeight:800 }}>Interview Report</h2>
+                <h2 style={{ fontSize:24, fontWeight:800 }}>Interview Feedback</h2>
                 <p style={{ color:"#a1a1aa", fontSize:13, marginTop:3 }}>{role} · {questions.length} questions</p>
               </div>
               <div style={{ textAlign:"right" }}>
                 <div style={{ fontSize:34, fontWeight:800, color:"#6366f1" }}>{report.weighted_total}<span style={{ fontSize:13, color:"#52525b" }}>/10</span></div>
-                <div style={{ marginTop:4, padding:"3px 12px", borderRadius:20, background:`${recColor}18`, border:`1px solid ${recColor}35`, color:recColor, fontSize:12, fontWeight:700 }}>{report.recommendation}</div>
+                <div style={{ marginTop:4, color:"#a1a1aa", fontSize:12, fontWeight:700 }}>Practice Score</div>
               </div>
             </div>
             <div className="card" style={{ marginBottom:14 }}>
@@ -1376,7 +1375,7 @@ function RecruiterPage() {
   const [search,     setSearch]     = useState("");
   const [filter,     setFilter]     = useState("All");
 
-  const rc = r => ({ "Strong Hire":"#22c55e","Hire":"#06b6d4","Maybe":"#f59e0b","No Hire":"#ef4444" }[r]||"#818cf8");
+  const rc = r => ({ "Strong Hire":"#22c55e","Hire":"#06b6d4","Maybe Hire":"#f59e0b","Maybe":"#f59e0b","No Hire":"#ef4444" }[r]||"#818cf8");
 
   useEffect(() => {
     get("/interviews/all", true)
@@ -1414,7 +1413,7 @@ function RecruiterPage() {
       <div style={{ display:"flex", gap:10, marginBottom:20 }}>
         <input className="input" placeholder="Search by name or role..." value={search} onChange={e => setSearch(e.target.value)} style={{ flex:1 }}/>
         <div style={{ display:"flex", gap:6 }}>
-          {["All","Strong Hire","Hire","Maybe","No Hire"].map(f => (
+          {["All","Strong Hire","Hire","Maybe Hire","No Hire"].map(f => (
             <button key={f} onClick={() => setFilter(f)}
               style={{ padding:"7px 12px", borderRadius:8, border:`1px solid ${filter===f?"rgba(99,102,241,.5)":"rgba(255,255,255,.08)"}`,
                 background: filter===f?"rgba(99,102,241,.15)":"transparent",
@@ -1996,12 +1995,6 @@ function CandidateDashboard({ user, onStartInterview }) {
                 </div>
                 <div style={{ display:"flex", alignItems:"center", gap:10 }}>
                   <span style={{ fontSize:20, fontWeight:900, color:"#818cf8" }}>{iv.score}%</span>
-                  <span style={{ padding:"3px 10px", borderRadius:20, fontSize:11, fontWeight:700,
-                    background: iv.recommendation==="Strong Hire"?"rgba(34,197,94,.12)": iv.recommendation==="Hire"?"rgba(99,102,241,.12)":"rgba(239,68,68,.12)",
-                    color: iv.recommendation==="Strong Hire"?"#22c55e": iv.recommendation==="Hire"?"#818cf8":"#f87171",
-                    border: `1px solid ${iv.recommendation==="Strong Hire"?"rgba(34,197,94,.3)": iv.recommendation==="Hire"?"rgba(99,102,241,.3)":"rgba(239,68,68,.3)"}` }}>
-                    {iv.recommendation}
-                  </span>
                   <span style={{ color:"#52525b" }}>{selected?.id===iv.id?"▲":"▼"}</span>
                 </div>
               </div>

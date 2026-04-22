@@ -249,13 +249,13 @@ def to_number(value):
 
 
 def get_recommendation_for_score(score: float) -> str:
-    normalized_score = normalize_score_to_percent(score) or 0
-    if normalized_score >= 75:
+    normalized_score = clamp_score_out_of_10(score)
+    if normalized_score >= 8:
         return "Strong Hire"
-    if normalized_score >= 50:
+    if normalized_score >= 6:
         return "Hire"
-    if normalized_score >= 40:
-        return "Maybe"
+    if normalized_score >= 5:
+        return "Maybe Hire"
     return "No Hire"
 
 
@@ -343,7 +343,7 @@ def normalize_interview_record(iv: dict) -> dict:
     saved_score = normalize_score_to_percent(iv.get("score"))
     if saved_score is not None:
         normalized["score"] = saved_score
-        normalized["recommendation"] = get_recommendation_for_score(saved_score)
+        normalized["recommendation"] = get_recommendation_for_score(saved_score / 10)
 
     coding = iv.get("coding") or {}
     problems = coding.get("problems") or []
@@ -365,7 +365,7 @@ def normalize_interview_record(iv: dict) -> dict:
     derived_score = round((sum(scores) / total_questions) * 10, 1)
     if saved_score is None or saved_score <= 0:
         normalized["score"] = derived_score
-        normalized["recommendation"] = get_recommendation_for_score(derived_score)
+        normalized["recommendation"] = get_recommendation_for_score(derived_score / 10)
     return normalized
 
 
@@ -672,10 +672,12 @@ class EvaluateAnswerRequest(BaseModel):
     role: str
     question: str
     answer: str
+    resume_text: Optional[str] = ""
 
 class GenerateReportRequest(BaseModel):
     role: str
     answers: List[dict]
+    resume_text: Optional[str] = ""
 
 class AnalyzeCodeRequest(BaseModel):
     problem_title: str
@@ -788,17 +790,28 @@ async def evaluate_answer(req: EvaluateAnswerRequest):
             "weighted_total": 0,
         }
 
-    content = f"""Evaluate this interview answer.
+    resume_context = req.resume_text.strip() if req.resume_text else "No resume was provided."
+
+    content = f"""Evaluate this interview answer like a fair human interviewer.
 
 Role: {req.role}
+Resume/context:
+{resume_context}
+
 Question: {req.question}
 Answer: {req.answer}
 
 Respond with ONLY this JSON, no text before or after:
 {{"scores":{{"technical_knowledge":7,"problem_solving":6,"communication_skills":8,"project_understanding":6,"confidence":7}},"strength":"What was good in one sentence","improvement":"What to improve in one sentence"}}
 
-Score strictly from 0 to 10. Use 0 for blank answers, irrelevant answers, or answers that do not address the question.
-Do not give an average score just for attempting an answer."""
+Scoring rules:
+- Score strictly from 0 to 10.
+- Evaluate meaning, relevance, and demonstrated understanding, not grammar or polished English.
+- Natural human language, simple wording, and imperfect sentences are acceptable when the answer is relevant.
+- Use the resume/context to credit truthful project or skill references that support the answer.
+- Do not reward unrelated, memorized, or vague answers just because they are long.
+- Use 0 for blank answers, irrelevant answers, or answers that do not address the question.
+- Do not give an average score just for attempting an answer."""
 
     raw = await call_groq([{"role": "user", "content": content}], max_tokens=500)
     try:
@@ -848,20 +861,27 @@ async def generate_report(req: GenerateReportRequest):
             "weighted_total": 0,
         }
 
+    resume_context = req.resume_text.strip() if req.resume_text else "No resume was provided."
+
     content = f"""Generate a recruiter-style interview report.
 
 Role: {req.role}
+Resume/context:
+{resume_context}
+
 Q&A:
 {qa_text}
 
 Respond with ONLY this JSON, no text before or after:
-{{"overall_score":7,"recommendation":"Hire","summary":"2-3 sentence summary.","strengths":["strength 1","strength 2"],"improvements":["improvement 1","improvement 2"]}}
+{{"overall_score":7,"summary":"2-3 sentence summary.","strengths":["strength 1","strength 2"],"improvements":["improvement 1","improvement 2"]}}
 
-recommendation must be one of: Strong Hire, Hire, Maybe, No Hire"""
+Evaluate answer quality against the questions, role, and resume/context. Do not judge grammar harshly when the meaning is clear."""
 
     raw = await call_groq([{"role": "user", "content": content}], max_tokens=700)
     try:
         base = parse_json(raw)
+        base["overall_score"] = weighted_total
+        base["recommendation"] = get_recommendation_for_score(weighted_total)
         base["metric_scores"] = avg_scores
         base["weighted_total"] = weighted_total
         return base

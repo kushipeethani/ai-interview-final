@@ -125,3 +125,47 @@ Then open http://localhost:5173 in Chrome.
 - RAG knowledge base with semantic search
 - Coding interview with AI analysis
 - Recruiter dashboard
+
+---
+
+## Deploy on Render
+
+This repo now includes a root `render.yaml` blueprint for:
+- `ai-interview-backend` as a Python web service
+- `ai-interview-frontend` as a static site
+
+### Before deploy
+
+Set these backend environment variables in Render:
+- `GROQ_API_KEY`
+- `SMTP_HOST`
+- `SMTP_PORT`
+- `SMTP_USER`
+- `SMTP_PASSWORD`
+- `SMTP_FROM_EMAIL`
+- `SMTP_FROM_NAME`
+- `SMTP_USE_TLS`
+- `ALLOW_INSECURE_OTP_RESPONSE`
+
+Set this frontend environment variable in Render:
+- `VITE_API_BASE_URL`
+
+Use your backend Render URL as the value, for example:
+```bash
+VITE_API_BASE_URL=https://your-backend-name.onrender.com
+```
+
+### Deploy steps
+
+1. Push this repository to GitHub.
+2. In Render, choose `New +` → `Blueprint`.
+3. Connect the GitHub repository.
+4. Render will detect `render.yaml` and create both services.
+5. Add the required environment variables before the first production use.
+6. Open the frontend Render URL after both services finish deploying.
+
+### Local env files
+
+Templates are included here:
+- `backend/.env.example`
+- `frontend/.env.example`

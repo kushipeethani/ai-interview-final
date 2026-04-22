@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { FaceDetector as MediaPipeFaceDetector, FilesetResolver } from "@mediapipe/tasks-vision";
 
 // ─── Backend API Base URL ────────────────────────────────────────────────────
-const API = "https://ai-interview-final-aaki.onrender.com";
+const API = (import.meta.env.VITE_API_BASE_URL || "http://localhost:8000").replace(/\/$/, "");
 // ─── Token helpers ───────────────────────────────────────────────────────────
 const getToken = () => sessionStorage.getItem("token");
 const getUser  = () => { try { return JSON.parse(sessionStorage.getItem("user")||"null"); } catch { return null; } };
@@ -620,14 +620,28 @@ const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test((value || "
 const hasSpecialCharacter = (value) => /[^A-Za-z0-9]/.test(value || "");
 
 const getRecommendationForScore = (score) => {
-  if (score >= 75) return "Strong Hire";
-  if (score >= 50) return "Hire";
-  if (score >= 40) return "Maybe";
+  const normalized = normalizeScoreToPercent(score);
+  if (normalized >= 75) return "Strong Hire";
+  if (normalized >= 50) return "Hire";
+  if (normalized >= 40) return "Maybe";
   return "No Hire";
+};
+
+const normalizeScoreToPercent = (value) => {
+  const numeric = toFiniteNumber(value);
+  if (numeric === null) return 0;
+  const scaled =
+    numeric > 0 && numeric <= 1
+      ? numeric * 100
+      : numeric > 0 && numeric <= 10
+        ? numeric * 10
+        : numeric;
+  return Number(Math.max(0, Math.min(100, scaled)).toFixed(1));
 };
 
 const getInterviewDisplayScore = (interview) => {
   const savedScore = toFiniteNumber(interview?.score);
+  const normalizedSavedScore = savedScore === null ? null : normalizeScoreToPercent(savedScore);
   const codingProblems = interview?.coding?.problems || [];
   const totalQuestions = Math.max(
     toFiniteNumber(interview?.coding?.total_questions) || 0,
@@ -641,24 +655,21 @@ const getInterviewDisplayScore = (interview) => {
     const derivedCodingScore = Math.round(
       (totalScore / totalQuestions) * 10
     );
-    if (savedScore === null || savedScore <= 0 || Math.abs(savedScore - derivedCodingScore) >= 20) {
+    if (normalizedSavedScore === null || normalizedSavedScore <= 0) {
       return derivedCodingScore;
     }
   }
 
-  return savedScore ?? 0;
+  return normalizedSavedScore ?? 0;
 };
 
 const normalizeInterviewForDisplay = (interview) => {
   const score = getInterviewDisplayScore(interview);
-  if (interview?.coding?.problems?.length) {
-    return {
-      ...interview,
-      score,
-      recommendation: getRecommendationForScore(score),
-    };
-  }
-  return { ...interview, score };
+  return {
+    ...interview,
+    score,
+    recommendation: getRecommendationForScore(score),
+  };
 };
 
 function CodingInterviewMode() {
@@ -943,10 +954,11 @@ function SaveInterviewButton({ report, role, proctoring, qa }) {
     if (saved || saving) return;
     setSaving(true);
     try {
+      const normalizedScore = normalizeScoreToPercent(report?.weighted_total);
       await post("/interviews/save", {
         role,
-        score: report.weighted_total || 0,
-        recommendation: report.recommendation || "Maybe",
+        score: normalizedScore,
+        recommendation: getRecommendationForScore(normalizedScore),
         skills: [],
         summary: report.summary || "",
         strengths: report.strengths || [],
@@ -1592,34 +1604,72 @@ function RecruiterPage() {
 }
 // ─── Auth Page ────────────────────────────────────────────────────────────────
 function AuthPage({ onAuth }) {
-  const [mode, setMode]         = useState("signin"); // "signin" | "signup"
-  const [role, setRole]         = useState("candidate");
-  const [email, setEmail]       = useState("");
+  const [mode, setMode] = useState("signin");
+  const [role, setRole] = useState("candidate");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [name, setName]         = useState("");
-  const [otp, setOtp]           = useState("");
-  const [showPw, setShowPw]     = useState(false);
-  const [error, setError]       = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [name, setName] = useState("");
+  const [otp, setOtp] = useState("");
+  const [resetToken, setResetToken] = useState("");
+  const [showPw, setShowPw] = useState(false);
+  const [showConfirmPw, setShowConfirmPw] = useState(false);
+  const [error, setError] = useState("");
   const [otpStatus, setOtpStatus] = useState("");
-  const [otpSent, setOtpSent]   = useState(false);
-  const [loading, setLoading]   = useState(false);
+  const [otpSent, setOtpSent] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [sendingOtp, setSendingOtp] = useState(false);
+  const [forgotStep, setForgotStep] = useState("request");
 
   const resetOtpState = () => {
     setOtp("");
     setOtpSent(false);
     setOtpStatus("");
+    setResetToken("");
+    setForgotStep("request");
+  };
+
+  const resetPasswordFields = () => {
+    setPassword("");
+    setConfirmPassword("");
+    setShowPw(false);
+    setShowConfirmPw(false);
   };
 
   const handleModeChange = (nextMode) => {
     setMode(nextMode);
     setError("");
-    if (nextMode !== "signup") resetOtpState();
+    resetPasswordFields();
+    if (nextMode === "forgot") {
+      resetOtpState();
+      return;
+    }
+    setOtp("");
+    setOtpSent(false);
+    setResetToken("");
+    setForgotStep("request");
+  };
+
+  const handleRoleChange = (nextRole) => {
+    setRole(nextRole);
+    setError("");
+    if (mode === "signup" || mode === "forgot") resetOtpState();
   };
 
   const handleEmailChange = (value) => {
     setEmail(value);
-    if (mode === "signup") resetOtpState();
+    if (mode === "signup" || mode === "forgot") resetOtpState();
+  };
+
+  const fill = (nextRole, nextEmail, nextPassword) => {
+    setMode("signin");
+    setRole(nextRole);
+    setEmail(nextEmail);
+    setPassword(nextPassword);
+    setConfirmPassword("");
+    setName("");
+    setError("");
+    resetOtpState();
   };
 
   async function handleSendOtp() {
@@ -1633,8 +1683,13 @@ function AuthPage({ onAuth }) {
 
     setSendingOtp(true);
     try {
-      const data = await post("/auth/request-signup-otp", { email: normalizedEmail });
+      const isForgotMode = mode === "forgot";
+      const data = await post(
+        isForgotMode ? "/auth/request-password-reset-otp" : "/auth/request-signup-otp",
+        isForgotMode ? { email: normalizedEmail, role } : { email: normalizedEmail }
+      );
       setOtpSent(true);
+      if (isForgotMode) setForgotStep("verify");
       setOtpStatus(data.dev_otp ? `${data.message} OTP: ${data.dev_otp}` : (data.message || "OTP sent to your email"));
     } catch (e) {
       setError(e.message);
@@ -1644,30 +1699,75 @@ function AuthPage({ onAuth }) {
   }
 
   async function handleSubmit() {
-    setError(""); setLoading(true);
+    setError("");
+    setLoading(true);
     try {
-      let data;
+      const normalizedEmail = email.trim().toLowerCase();
+      let data = null;
+
       if (mode === "signup") {
-        const normalizedEmail = email.trim().toLowerCase();
         if (!name.trim()) throw new Error("Enter your full name");
         if (!isValidEmail(normalizedEmail)) throw new Error("Enter a valid email address");
+        if (!password) throw new Error("Enter your password");
         if (!hasSpecialCharacter(password)) throw new Error("Password must include at least 1 special character");
         if (!otp.trim()) throw new Error("Enter the OTP sent to your email");
         data = await post("/auth/signup", { name: name.trim(), email: normalizedEmail, password, otp: otp.trim(), role });
+      } else if (mode === "forgot") {
+        if (!isValidEmail(normalizedEmail)) throw new Error("Enter a valid email address");
+        if (forgotStep === "verify") {
+          if (!otp.trim()) throw new Error("Enter the OTP sent to your email");
+          const verified = await post("/auth/verify-password-reset-otp", {
+            email: normalizedEmail,
+            role,
+            otp: otp.trim(),
+          });
+          setResetToken(verified.reset_token || "");
+          setForgotStep("reset");
+          setOtpStatus(verified.message || "OTP verified. Enter your new password.");
+          resetPasswordFields();
+        } else if (forgotStep === "reset") {
+          if (!resetToken) throw new Error("Reset session expired. Request a new OTP");
+          if (!password) throw new Error("Enter your new password");
+          if (!confirmPassword) throw new Error("Confirm your new password");
+          if (!hasSpecialCharacter(password)) throw new Error("Password must include at least 1 special character");
+          if (password !== confirmPassword) throw new Error("Passwords do not match");
+          await post("/auth/reset-password", {
+            reset_token: resetToken,
+            password,
+            confirm_password: confirmPassword,
+          });
+          setMode("signin");
+          setPassword("");
+          setConfirmPassword("");
+          setOtp("");
+          setOtpSent(false);
+          setResetToken("");
+          setForgotStep("request");
+          setOtpStatus("Password updated. Sign in with your new password.");
+        } else {
+          throw new Error("Send an OTP to continue");
+        }
       } else {
-        data = await post("/auth/login", { email: email.trim().toLowerCase(), password });
+        if (!isValidEmail(normalizedEmail)) throw new Error("Enter a valid email address");
+        if (!password) throw new Error("Enter your password");
+        data = await post("/auth/login", { email: normalizedEmail, password, role });
       }
-      sessionStorage.setItem("token", data.token);
-      sessionStorage.setItem("user",  JSON.stringify(data.user));
-      onAuth(data.user);
-    } catch (e) { setError(e.message); }
-    finally { setLoading(false); }
+
+      if (data?.token && data?.user) {
+        sessionStorage.setItem("token", data.token);
+        sessionStorage.setItem("user", JSON.stringify(data.user));
+        onAuth(data.user);
+      }
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
     <div style={{ minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}>
       <div style={{ width:"100%", maxWidth:420 }}>
-        {/* Logo */}
         <div style={{ textAlign:"center", marginBottom:32 }}>
           <div style={{ display:"inline-flex", alignItems:"center", gap:10, marginBottom:10 }}>
             <Icons.Brain/><span style={{ fontSize:22, fontWeight:900, letterSpacing:"-.02em" }}>AI Interview</span>
@@ -1675,11 +1775,9 @@ function AuthPage({ onAuth }) {
           <p style={{ color:"#a1a1aa", fontSize:13 }}>Your AI-powered interview coach</p>
         </div>
 
-        {/* Card */}
         <div className="card" style={{ border:"1px solid rgba(99,102,241,.25)", padding:28 }}>
-          {/* Tabs */}
           <div style={{ display:"flex", gap:0, marginBottom:24, borderRadius:10, background:"rgba(255,255,255,.04)", padding:3 }}>
-            {[["signin","Sign In"],["signup","Sign Up"]].map(([k,l]) => (
+            {[ ["signin","Sign In"], ["signup","Sign Up"], ["forgot","Forgot Password"] ].map(([k,l]) => (
               <button key={k} onClick={() => handleModeChange(k)}
                 style={{ flex:1, padding:"8px 0", borderRadius:8, border:"none", cursor:"pointer", fontSize:13, fontWeight:700,
                   background: mode===k ? "rgba(99,102,241,.25)" : "transparent",
@@ -1689,22 +1787,20 @@ function AuthPage({ onAuth }) {
             ))}
           </div>
 
-          {/* Role selector */}
-          {mode==="signup" && <div style={{ marginBottom:16 }}>
+          <div style={{ marginBottom:16 }}>
             <label style={{ fontSize:11, fontWeight:700, color:"#a1a1aa", display:"block", marginBottom:6 }}>ACCOUNT TYPE *</label>
             <div style={{ display:"flex", gap:8 }}>
-              {[["candidate","Candidate"],["hr","HR"]].map(([k,l]) => (
-                <button key={k} onClick={() => setRole(k)}
+              {[ ["candidate","Candidate"], ["hr","HR"] ].map(([k,l]) => (
+                <button key={k} onClick={() => handleRoleChange(k)}
                   style={{ flex:1, padding:"10px 0", borderRadius:9, border:`1.5px solid ${role===k?"rgba(99,102,241,.6)":"rgba(255,255,255,.08)"}`,
                     background: role===k ? "rgba(99,102,241,.14)" : "rgba(255,255,255,.02)",
                     color: role===k ? "#818cf8" : "#a1a1aa", fontSize:13, fontWeight:700, cursor:"pointer" }}>
-                  {l}
+                  {mode==="signin" ? `${l} Login` : l}
                 </button>
               ))}
             </div>
-          </div>}
+          </div>
 
-          {/* Name (signup only) */}
           {mode==="signup" && (
             <div style={{ marginBottom:14 }}>
               <label style={{ fontSize:11, fontWeight:700, color:"#a1a1aa", display:"block", marginBottom:6 }}>FULL NAME *</label>
@@ -1712,12 +1808,11 @@ function AuthPage({ onAuth }) {
             </div>
           )}
 
-          {/* Email */}
           <div style={{ marginBottom:14 }}>
-            <label style={{ fontSize:11, fontWeight:700, color:"#a1a1aa", display:"block", marginBottom:6 }}>EMAIL {mode==="signup" ? "*" : ""}</label>
+            <label style={{ fontSize:11, fontWeight:700, color:"#a1a1aa", display:"block", marginBottom:6 }}>EMAIL *</label>
             <div style={{ display:"flex", gap:8 }}>
               <input className="input" type="email" placeholder="you@example.com" value={email} onChange={e => handleEmailChange(e.target.value)} style={{ width:"100%" }}/>
-              {mode==="signup" && (
+              {(mode==="signup" || (mode==="forgot" && forgotStep==="request")) && (
                 <button className="btn btn-ghost" type="button" onClick={handleSendOtp} disabled={sendingOtp} style={{ padding:"0 12px", fontSize:11 }}>
                   {sendingOtp ? <Icons.Spin size={14}/> : otpSent ? "Resend OTP" : "Send OTP"}
                 </button>
@@ -1725,19 +1820,28 @@ function AuthPage({ onAuth }) {
             </div>
           </div>
 
-          {/* Password */}
-          <div style={{ marginBottom:mode==="signup" ? 14 : 20 }}>
-            <label style={{ fontSize:11, fontWeight:700, color:"#a1a1aa", display:"block", marginBottom:6 }}>PASSWORD {mode==="signup" ? "*" : ""}</label>
-            <div style={{ position:"relative" }}>
-              <input className="input" type={showPw?"text":"password"} placeholder="••••••••" value={password}
-                onChange={e => setPassword(e.target.value)} onKeyDown={e => e.key==="Enter"&&handleSubmit()}
-                style={{ width:"100%", paddingRight:40 }}/>
-              <button onClick={() => setShowPw(!showPw)} style={{ position:"absolute", right:10, top:"50%", transform:"translateY(-50%)",
-                background:"none", border:"none", cursor:"pointer", color:"#71717a", fontSize:13 }}>
-                {showPw?"🙈":"👁️"}
+          {(mode==="signin" || mode==="signup") && (
+            <div style={{ marginBottom:mode==="signup" ? 14 : 12 }}>
+              <label style={{ fontSize:11, fontWeight:700, color:"#a1a1aa", display:"block", marginBottom:6 }}>PASSWORD *</label>
+              <div style={{ position:"relative" }}>
+                <input className="input" type={showPw?"text":"password"} placeholder="????????" value={password}
+                  onChange={e => setPassword(e.target.value)} onKeyDown={e => e.key==="Enter"&&handleSubmit()}
+                  style={{ width:"100%", paddingRight:54 }}/>
+                <button type="button" onClick={() => setShowPw(!showPw)} style={{ position:"absolute", right:10, top:"50%", transform:"translateY(-50%)",
+                  background:"none", border:"none", cursor:"pointer", color:"#71717a", fontSize:12 }}>
+                  {showPw?"Hide":"Show"}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {mode==="signin" && (
+            <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:18 }}>
+              <button type="button" onClick={() => handleModeChange("forgot")} style={{ background:"none", border:"none", color:"#818cf8", fontSize:12, cursor:"pointer", padding:0 }}>
+                Forgot password?
               </button>
             </div>
-          </div>
+          )}
 
           {mode==="signup" && (
             <div style={{ marginBottom:20 }}>
@@ -1749,23 +1853,64 @@ function AuthPage({ onAuth }) {
               {otpStatus && <p style={{ marginTop:6, fontSize:11, color:"#818cf8" }}>{otpStatus}</p>}
             </div>
           )}
-          {mode==="signup" && <p style={{ marginTop:-8, marginBottom:14, fontSize:11, color:"#71717a" }}>Password must include at least 1 special character.</p>}
+
+          {mode==="forgot" && forgotStep==="verify" && (
+            <div style={{ marginBottom:18 }}>
+              <label style={{ fontSize:11, fontWeight:700, color:"#a1a1aa", display:"block", marginBottom:6 }}>EMAIL OTP *</label>
+              <input className="input" placeholder="Enter 6-digit OTP" value={otp}
+                onChange={e => setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                onKeyDown={e => e.key==="Enter"&&handleSubmit()}
+                style={{ width:"100%", letterSpacing:"0.24em" }}/>
+              {otpStatus && <p style={{ marginTop:6, fontSize:11, color:"#818cf8" }}>{otpStatus}</p>}
+            </div>
+          )}
+
+          {mode==="forgot" && forgotStep==="reset" && (
+            <>
+              <div style={{ marginBottom:14 }}>
+                <label style={{ fontSize:11, fontWeight:700, color:"#a1a1aa", display:"block", marginBottom:6 }}>NEW PASSWORD *</label>
+                <div style={{ position:"relative" }}>
+                  <input className="input" type={showPw?"text":"password"} placeholder="Enter new password" value={password}
+                    onChange={e => setPassword(e.target.value)} onKeyDown={e => e.key==="Enter"&&handleSubmit()}
+                    style={{ width:"100%", paddingRight:54 }}/>
+                  <button type="button" onClick={() => setShowPw(!showPw)} style={{ position:"absolute", right:10, top:"50%", transform:"translateY(-50%)",
+                    background:"none", border:"none", cursor:"pointer", color:"#71717a", fontSize:12 }}>
+                    {showPw?"Hide":"Show"}
+                  </button>
+                </div>
+              </div>
+              <div style={{ marginBottom:18 }}>
+                <label style={{ fontSize:11, fontWeight:700, color:"#a1a1aa", display:"block", marginBottom:6 }}>CONFIRM NEW PASSWORD *</label>
+                <div style={{ position:"relative" }}>
+                  <input className="input" type={showConfirmPw?"text":"password"} placeholder="Re-enter new password" value={confirmPassword}
+                    onChange={e => setConfirmPassword(e.target.value)} onKeyDown={e => e.key==="Enter"&&handleSubmit()}
+                    style={{ width:"100%", paddingRight:54 }}/>
+                  <button type="button" onClick={() => setShowConfirmPw(!showConfirmPw)} style={{ position:"absolute", right:10, top:"50%", transform:"translateY(-50%)",
+                    background:"none", border:"none", cursor:"pointer", color:"#71717a", fontSize:12 }}>
+                    {showConfirmPw?"Hide":"Show"}
+                  </button>
+                </div>
+              </div>
+              {otpStatus && <p style={{ marginTop:-8, marginBottom:12, fontSize:11, color:"#818cf8" }}>{otpStatus}</p>}
+            </>
+          )}
+
+          {(mode==="signup" || (mode==="forgot" && forgotStep==="reset")) && <p style={{ marginTop:-8, marginBottom:14, fontSize:11, color:"#71717a" }}>Password must include at least 1 special character.</p>}
           {error && <div style={{ marginBottom:14, padding:"9px 13px", borderRadius:8, background:"rgba(239,68,68,.1)", border:"1px solid rgba(239,68,68,.25)", color:"#f87171", fontSize:13 }}>{error}</div>}
 
           <button className="btn btn-primary" onClick={handleSubmit} disabled={loading} style={{ width:"100%", padding:"11px 0", fontSize:14 }}>
-            {loading ? <Icons.Spin size={16}/> : mode==="signin" ? "Sign In" : "Create Account"}
+            {loading ? <Icons.Spin size={16}/> : mode==="signin" ? `Sign In as ${role==="hr" ? "HR" : "Candidate"}` : mode==="signup" ? "Create Account" : forgotStep==="verify" ? "Verify OTP" : forgotStep==="reset" ? "Save New Password" : "Send OTP to Continue"}
           </button>
 
-          {/* Demo accounts */}
           <div style={{ display:"none", marginTop:18, borderTop:"1px solid rgba(255,255,255,.07)", paddingTop:14 }}>
             <p style={{ fontSize:11, color:"#52525b", marginBottom:8, textAlign:"center" }}>DEMO ACCOUNTS</p>
             <div style={{ display:"flex", gap:8 }}>
-              <button onClick={() => fill("candidate@demo.com","candidate123")}
+              <button onClick={() => fill("candidate","candidate@demo.com","candidate123")}
                 style={{ flex:1, padding:"7px 0", borderRadius:8, border:"1px solid rgba(255,255,255,.08)", background:"transparent",
-                  color:"#a1a1aa", fontSize:11, cursor:"pointer" }}>🎯 Candidate</button>
-              <button onClick={() => fill("hr@demo.com","hr123")}
+                  color:"#a1a1aa", fontSize:11, cursor:"pointer" }}>Candidate</button>
+              <button onClick={() => fill("hr","hr@demo.com","hr123")}
                 style={{ flex:1, padding:"7px 0", borderRadius:8, border:"1px solid rgba(255,255,255,.08)", background:"transparent",
-                  color:"#a1a1aa", fontSize:11, cursor:"pointer" }}>👔 HR</button>
+                  color:"#a1a1aa", fontSize:11, cursor:"pointer" }}>HR</button>
             </div>
           </div>
         </div>
@@ -1774,7 +1919,7 @@ function AuthPage({ onAuth }) {
   );
 }
 
-// ─── Candidate Dashboard ──────────────────────────────────────────────────────
+// ????????? Candidate Dashboard ??????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
 function CandidateDashboard({ user, onStartInterview }) {
   const [interviews, setInterviews] = useState([]);
   const [selected,   setSelected]   = useState(null);

@@ -77,13 +77,16 @@ WEIGHTS = {
 # ─── Auth Data ────────────────────────────────────────────────────────────────
 def hash_pw(p): return hashlib.sha256(p.encode()).hexdigest()
 
-USERS_DB = {
+DEFAULT_USERS = {
     "hr@demo.com":        {"id":"u1","name":"HR Manager","email":"hr@demo.com","role":"hr","pw":hash_pw("hr123")},
     "candidate@demo.com": {"id":"u2","name":"Demo Candidate","email":"candidate@demo.com","role":"candidate","pw":hash_pw("candidate123")},
 }
 TOKENS_DB = {}  # token -> user_id
 SIGNUP_OTP_DB = {}  # email -> {"otp": str, "expires_at": datetime}
+PASSWORD_RESET_OTP_DB = {}  # email -> {"otp": str, "expires_at": datetime, "role": str}
+PASSWORD_RESET_SESSION_DB = {}  # reset_token -> {"email": str, "expires_at": datetime, "role": str}
 
+USERS_DB_FILE = Path(__file__).with_name("users_db.json")
 INTERVIEWS_DB_FILE = Path(__file__).with_name("interviews_db.json")
 DEFAULT_INTERVIEWS = []
 
@@ -96,6 +99,21 @@ SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL", "").strip() or SMTP_USER
 SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME", "AI Interview")
 SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "true").strip().lower() != "false"
 ALLOW_INSECURE_OTP_RESPONSE = os.getenv("ALLOW_INSECURE_OTP_RESPONSE", "false").strip().lower() == "true"
+
+
+def load_users():
+    if USERS_DB_FILE.exists():
+        try:
+            data = json.loads(USERS_DB_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+    return json.loads(json.dumps(DEFAULT_USERS))
+
+
+def save_users():
+    USERS_DB_FILE.write_text(json.dumps(USERS_DB, indent=2), encoding="utf-8")
 
 
 def load_interviews():
@@ -112,8 +130,11 @@ def load_interviews():
 def save_interviews():
     INTERVIEWS_DB_FILE.write_text(json.dumps(INTERVIEWS_DB, indent=2), encoding="utf-8")
 
-
+USERS_DB = load_users()
 INTERVIEWS_DB = load_interviews()
+
+if not USERS_DB_FILE.exists():
+    save_users()
 
 EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
 
@@ -149,6 +170,26 @@ def get_signup_otp_record(email: str) -> Optional[dict]:
     return record
 
 
+def get_password_reset_otp_record(email: str) -> Optional[dict]:
+    record = PASSWORD_RESET_OTP_DB.get(email)
+    if not record:
+        return None
+    if record["expires_at"] <= utc_now():
+        PASSWORD_RESET_OTP_DB.pop(email, None)
+        return None
+    return record
+
+
+def get_password_reset_session(reset_token: str) -> Optional[dict]:
+    record = PASSWORD_RESET_SESSION_DB.get(reset_token)
+    if not record:
+        return None
+    if record["expires_at"] <= utc_now():
+        PASSWORD_RESET_SESSION_DB.pop(reset_token, None)
+        return None
+    return record
+
+
 def is_smtp_configured() -> bool:
     return bool(SMTP_HOST and SMTP_FROM_EMAIL)
 
@@ -163,17 +204,17 @@ def build_otp_config_error() -> HTTPException:
     )
 
 
-def send_signup_otp_email(recipient_email: str, otp: str) -> None:
+def send_auth_otp_email(recipient_email: str, otp: str, purpose: str) -> None:
     if not is_smtp_configured():
         raise build_otp_config_error()
 
     message = EmailMessage()
-    message["Subject"] = "Your AI Interview signup OTP"
+    message["Subject"] = f"Your AI Interview {purpose} OTP"
     message["From"] = f"{SMTP_FROM_NAME} <{SMTP_FROM_EMAIL}>"
     message["To"] = recipient_email
     message.set_content(
         "\n".join([
-            "Your AI Interview signup OTP is:",
+            f"Your AI Interview {purpose} OTP is:",
             otp,
             "",
             f"It expires in {OTP_EXPIRY_MINUTES} minutes.",
@@ -196,6 +237,10 @@ def send_signup_otp_email(recipient_email: str, otp: str) -> None:
         raise HTTPException(status_code=500, detail="Unable to send OTP email right now") from exc
 
 
+def send_signup_otp_email(recipient_email: str, otp: str) -> None:
+    send_auth_otp_email(recipient_email, otp, "signup")
+
+
 def to_number(value):
     try:
         return float(value)
@@ -204,13 +249,26 @@ def to_number(value):
 
 
 def get_recommendation_for_score(score: float) -> str:
-    if score >= 75:
+    normalized_score = normalize_score_to_percent(score) or 0
+    if normalized_score >= 75:
         return "Strong Hire"
-    if score >= 50:
+    if normalized_score >= 50:
         return "Hire"
-    if score >= 40:
+    if normalized_score >= 40:
         return "Maybe"
     return "No Hire"
+
+
+def normalize_score_to_percent(value) -> Optional[float]:
+    score = to_number(value)
+    if score is None:
+        return None
+    if 0 < score <= 1:
+        score *= 100
+    elif 0 < score <= 10:
+        score *= 10
+    score = max(0.0, min(100.0, score))
+    return round(score, 1)
 
 
 def get_coding_analysis_score(analysis: dict) -> Optional[float]:
@@ -271,12 +329,18 @@ def normalize_interview_record(iv: dict) -> dict:
     if not isinstance(iv, dict):
         return iv
 
+    normalized = dict(iv)
+    saved_score = normalize_score_to_percent(iv.get("score"))
+    if saved_score is not None:
+        normalized["score"] = saved_score
+        normalized["recommendation"] = get_recommendation_for_score(saved_score)
+
     coding = iv.get("coding") or {}
     problems = coding.get("problems") or []
     total_questions = max(int(to_number(coding.get("total_questions")) or 0), len(problems))
 
     if not problems or total_questions <= 0:
-        return iv
+        return normalized
 
     scores = []
     for problem in problems:
@@ -286,12 +350,12 @@ def normalize_interview_record(iv: dict) -> dict:
         scores.append(score if score is not None else 0)
 
     if not any(score > 0 for score in scores):
-        return iv
+        return normalized
 
-    derived_score = round((sum(scores) / total_questions) * 10)
-    normalized = dict(iv)
-    normalized["score"] = derived_score
-    normalized["recommendation"] = get_recommendation_for_score(derived_score)
+    derived_score = round((sum(scores) / total_questions) * 10, 1)
+    if saved_score is None or saved_score <= 0:
+        normalized["score"] = derived_score
+        normalized["recommendation"] = get_recommendation_for_score(derived_score)
     return normalized
 
 
@@ -322,6 +386,21 @@ class SignupOtpRequest(BaseModel):
 class LoginRequest(BaseModel):
     email: str
     password: str
+    role: Optional[str] = None
+
+class PasswordResetOtpRequest(BaseModel):
+    email: str
+    role: str
+
+class PasswordResetVerifyRequest(BaseModel):
+    email: str
+    role: str
+    otp: str
+
+class PasswordResetConfirmRequest(BaseModel):
+    reset_token: str
+    password: str
+    confirm_password: str
 
 
 # ─── Auth Endpoints ───────────────────────────────────────────────────────────
@@ -370,6 +449,7 @@ async def signup(req: SignupRequest):
 
     uid = "u" + str(uuid.uuid4())[:8]
     USERS_DB[email] = {"id":uid,"name":name,"email":email,"role":req.role,"pw":hash_pw(req.password)}
+    save_users()
     SIGNUP_OTP_DB.pop(email, None)
     token = str(uuid.uuid4())
     TOKENS_DB[token] = uid
@@ -381,9 +461,88 @@ async def login(req: LoginRequest):
     u = USERS_DB.get(normalize_email(req.email))
     if not u or u["pw"] != hash_pw(req.password):
         raise HTTPException(status_code=401, detail="Invalid email or password")
+    if req.role and u["role"] != req.role:
+        raise HTTPException(status_code=403, detail=f"This account is registered as {u['role']}, not {req.role}")
     token = str(uuid.uuid4())
     TOKENS_DB[token] = u["id"]
     return {"token": token, "user": {"id":u["id"],"name":u["name"],"email":u["email"],"role":u["role"]}}
+
+
+@app.post("/auth/request-password-reset-otp")
+async def request_password_reset_otp(req: PasswordResetOtpRequest):
+    email = normalize_email(req.email)
+    role = (req.role or "").strip().lower()
+    if role not in {"candidate", "hr"}:
+        raise HTTPException(status_code=400, detail="Choose a valid account type")
+    if not is_valid_email(email):
+        raise HTTPException(status_code=400, detail="Enter a valid email address")
+
+    user = USERS_DB.get(email)
+    if not user or user["role"] != role:
+        raise HTTPException(status_code=404, detail=f"No {role} account found for this email")
+
+    otp = f"{random.randint(0, 999999):06d}"
+    PASSWORD_RESET_OTP_DB[email] = {
+        "otp": otp,
+        "role": role,
+        "expires_at": utc_now() + timedelta(minutes=OTP_EXPIRY_MINUTES),
+    }
+
+    if is_smtp_configured():
+        send_auth_otp_email(email, otp, "password reset")
+        return {"ok": True, "message": f"OTP sent to {email}"}
+    if ALLOW_INSECURE_OTP_RESPONSE:
+        return {
+            "ok": True,
+            "message": "SMTP is not configured. Returning OTP directly because ALLOW_INSECURE_OTP_RESPONSE=true.",
+            "dev_otp": otp,
+        }
+    raise build_otp_config_error()
+
+
+@app.post("/auth/verify-password-reset-otp")
+async def verify_password_reset_otp(req: PasswordResetVerifyRequest):
+    email = normalize_email(req.email)
+    role = (req.role or "").strip().lower()
+    if role not in {"candidate", "hr"}:
+        raise HTTPException(status_code=400, detail="Choose a valid account type")
+    if not is_valid_email(email):
+        raise HTTPException(status_code=400, detail="Enter a valid email address")
+
+    record = get_password_reset_otp_record(email)
+    if not record or record.get("role") != role:
+        raise HTTPException(status_code=400, detail="Request a new OTP to continue")
+    if (req.otp or "").strip() != record["otp"]:
+        raise HTTPException(status_code=400, detail="Invalid OTP")
+
+    reset_token = str(uuid.uuid4())
+    PASSWORD_RESET_SESSION_DB[reset_token] = {
+        "email": email,
+        "role": role,
+        "expires_at": utc_now() + timedelta(minutes=OTP_EXPIRY_MINUTES),
+    }
+    PASSWORD_RESET_OTP_DB.pop(email, None)
+    return {"ok": True, "message": "OTP verified", "reset_token": reset_token}
+
+
+@app.post("/auth/reset-password")
+async def reset_password(req: PasswordResetConfirmRequest):
+    session = get_password_reset_session((req.reset_token or "").strip())
+    if not session:
+        raise HTTPException(status_code=400, detail="Reset session expired. Request a new OTP")
+    if req.password != req.confirm_password:
+        raise HTTPException(status_code=400, detail="Passwords do not match")
+    validate_signup_password(req.password)
+
+    user = USERS_DB.get(session["email"])
+    if not user or user["role"] != session["role"]:
+        PASSWORD_RESET_SESSION_DB.pop(req.reset_token, None)
+        raise HTTPException(status_code=404, detail="Account no longer exists")
+
+    user["pw"] = hash_pw(req.password)
+    save_users()
+    PASSWORD_RESET_SESSION_DB.pop(req.reset_token, None)
+    return {"ok": True, "message": "Password reset successful"}
 
 @app.post("/auth/logout")
 async def logout(authorization: Optional[str] = Header(default=None)):

@@ -271,6 +271,16 @@ def normalize_score_to_percent(value) -> Optional[float]:
     return round(score, 1)
 
 
+def clamp_score_out_of_10(value) -> float:
+    score = to_number(value)
+    if score is None:
+        return 0.0
+    if score > 10:
+        score /= 10
+    score = max(0.0, min(10.0, score))
+    return round(score, 1)
+
+
 def get_coding_analysis_score(analysis: dict) -> Optional[float]:
     if not isinstance(analysis, dict):
         return None
@@ -770,6 +780,14 @@ Example: ["Question 1?","Question 2?","Question 3?","Question 4?","Question 5?"]
 
 @app.post("/evaluate-answer")
 async def evaluate_answer(req: EvaluateAnswerRequest):
+    if not req.answer or not req.answer.strip():
+        return {
+            "scores": {key: 0 for key in WEIGHTS},
+            "strength": "No answer was recorded.",
+            "improvement": "Answer the question with specific, relevant details.",
+            "weighted_total": 0,
+        }
+
     content = f"""Evaluate this interview answer.
 
 Role: {req.role}
@@ -777,13 +795,20 @@ Question: {req.question}
 Answer: {req.answer}
 
 Respond with ONLY this JSON, no text before or after:
-{{"scores":{{"technical_knowledge":7,"problem_solving":6,"communication_skills":8,"project_understanding":6,"confidence":7}},"strength":"What was good in one sentence","improvement":"What to improve in one sentence"}}"""
+{{"scores":{{"technical_knowledge":7,"problem_solving":6,"communication_skills":8,"project_understanding":6,"confidence":7}},"strength":"What was good in one sentence","improvement":"What to improve in one sentence"}}
+
+Score strictly from 0 to 10. Use 0 for blank answers, irrelevant answers, or answers that do not address the question.
+Do not give an average score just for attempting an answer."""
 
     raw = await call_groq([{"role": "user", "content": content}], max_tokens=500)
     try:
         result = parse_json(raw)
+        result["scores"] = {
+            key: clamp_score_out_of_10(result.get("scores", {}).get(key))
+            for key in WEIGHTS
+        }
         result["weighted_total"] = round(
-            sum(result["scores"].get(k, 5) * v for k, v in WEIGHTS.items()), 1
+            sum(result["scores"].get(k, 0) * v for k, v in WEIGHTS.items()), 1
         )
         return result
     except Exception as e:
@@ -793,12 +818,35 @@ Respond with ONLY this JSON, no text before or after:
 @app.post("/generate-report")
 async def generate_report(req: GenerateReportRequest):
     qa_text = "\n\n".join([f"Q{i+1}: {a['q']}\nA: {a['a']}" for i, a in enumerate(req.answers)])
+    answered = [a for a in req.answers if str(a.get("a", "")).strip()]
+
+    if not req.answers:
+        return {
+            "overall_score": 0,
+            "recommendation": "No Hire",
+            "summary": "No interview answers were submitted, so the candidate could not be evaluated.",
+            "strengths": [],
+            "improvements": ["Complete the interview questions before generating a report."],
+            "metric_scores": {key: 0 for key in WEIGHTS},
+            "weighted_total": 0,
+        }
 
     avg_scores = {}
     for key in WEIGHTS:
-        vals = [a.get("scores", {}).get(key, 5) for a in req.answers]
+        vals = [clamp_score_out_of_10(a.get("scores", {}).get(key)) for a in req.answers]
         avg_scores[key] = round(sum(vals) / len(vals), 1)
     weighted_total = round(sum(avg_scores[k] * v for k, v in WEIGHTS.items()), 1)
+
+    if not answered or weighted_total <= 0:
+        return {
+            "overall_score": 0,
+            "recommendation": "No Hire",
+            "summary": "No usable interview answers were recorded, so the candidate could not be evaluated.",
+            "strengths": [],
+            "improvements": ["Provide complete, relevant answers to each interview question."],
+            "metric_scores": avg_scores,
+            "weighted_total": 0,
+        }
 
     content = f"""Generate a recruiter-style interview report.
 

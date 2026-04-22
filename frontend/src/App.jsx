@@ -628,6 +628,13 @@ const getRecommendationForScore = (score) => {
   return "No Hire";
 };
 
+const clampScoreOutOf10 = (value) => {
+  const numeric = toFiniteNumber(value);
+  if (numeric === null) return 0;
+  const scaled = numeric > 10 ? numeric / 10 : numeric;
+  return Number(Math.max(0, Math.min(10, scaled)).toFixed(1));
+};
+
 const normalizeScoreToPercent = (value) => {
   const numeric = toFiniteNumber(value);
   if (numeric === null) return 0;
@@ -642,7 +649,7 @@ const normalizeScoreToPercent = (value) => {
 
 const getInterviewDisplayScore = (interview) => {
   const savedScore = toFiniteNumber(interview?.score);
-  const normalizedSavedScore = savedScore === null ? null : normalizeScoreToPercent(savedScore);
+  const normalizedSavedScore = savedScore === null ? null : Math.max(0, Math.min(100, savedScore));
   const codingProblems = interview?.coding?.problems || [];
   const totalQuestions = Math.max(
     toFiniteNumber(interview?.coding?.total_questions) || 0,
@@ -653,9 +660,7 @@ const getInterviewDisplayScore = (interview) => {
 
   if (totalQuestions > 0 && codingScores.some(score => score !== null)) {
     const totalScore = codingScores.reduce((sum, score) => sum + (score ?? 0), 0);
-    const derivedCodingScore = Math.round(
-      (totalScore / totalQuestions) * 10
-    );
+    const derivedCodingScore = Number(((totalScore / totalQuestions) * 10).toFixed(1));
     if (normalizedSavedScore === null || normalizedSavedScore <= 0) {
       return derivedCodingScore;
     }
@@ -955,10 +960,10 @@ function SaveInterviewButton({ report, role, proctoring, qa }) {
     if (saved || saving) return;
     setSaving(true);
     try {
-      const normalizedScore = normalizeScoreToPercent(report?.weighted_total);
+      const normalizedScore = clampScoreOutOf10(report?.weighted_total);
       await post("/interviews/save", {
         role,
-        score: normalizedScore,
+        score: normalizeScoreToPercent(normalizedScore),
         recommendation: getRecommendationForScore(normalizedScore),
         skills: [],
         summary: report.summary || "",
@@ -1118,7 +1123,12 @@ function InterviewPage({ onFinish }) {
         speakQuestion(questions[next], startListening);
       }
     } catch {
-      const fb = { scores:{ technical_knowledge:6, problem_solving:6, communication_skills:7, project_understanding:5, confidence:7 }, strength:"Recorded", improvement:"Keep practicing", weighted_total:6.3 };
+      const fb = {
+        scores:{ technical_knowledge:0, problem_solving:0, communication_skills:0, project_understanding:0, confidence:0 },
+        strength:"No score was recorded.",
+        improvement:"Please retry this answer so it can be evaluated.",
+        weighted_total:0,
+      };
       const nextAnswers = [...answers, { q: questions[currentQ], a: transcript, ...fb }];
       setAnswers(nextAnswers);
       setTranscript("");
@@ -1140,7 +1150,15 @@ function InterviewPage({ onFinish }) {
       const data = await post("/generate-report", { role, answers: allAnswers });
       setReport(data);
     } catch {
-      setReport({ overall_score:7, recommendation:"Hire", summary:"Solid performance.", strengths:["Good communication"], improvements:["More depth"], metric_scores:{ technical_knowledge:7, problem_solving:7, communication_skills:7, project_understanding:6, confidence:7 }, weighted_total:7.0 });
+      setReport({
+        overall_score:0,
+        recommendation:"No Hire",
+        summary:"The report could not be generated, so no positive score was assigned.",
+        strengths:[],
+        improvements:["Retry the interview when the evaluator is available."],
+        metric_scores:{ technical_knowledge:0, problem_solving:0, communication_skills:0, project_understanding:0, confidence:0 },
+        weighted_total:0,
+      });
     } finally { setIsLoading(false); }
   };
 
@@ -1373,7 +1391,7 @@ function RecruiterPage() {
     try {
       const data = await post("/ask-recruiter", {
         candidate_name: selected.name, candidate_role: selected.role,
-        score: selected.score, recommendation: selected.recommendation,
+        score: clampScoreOutOf10(selected.score), recommendation: selected.recommendation,
         skills: selected.skills || [], question
       }, true);
       setAnswer(data.answer);
@@ -1589,7 +1607,7 @@ function RecruiterPage() {
 
               {/* Metrics breakdown */}
               {!selected.coding?.problems?.length && selected.scores && Object.keys(selected.scores).length > 0 && (
-                <EvaluationBreakdown scores={selected.scores} weighted_total={selected.score}/>
+                <EvaluationBreakdown scores={selected.scores} weighted_total={clampScoreOutOf10(selected.score)}/>
               )}
             </div>
           ) : (

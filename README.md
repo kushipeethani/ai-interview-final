@@ -145,6 +145,7 @@ Set these backend environment variables in Render:
 - `SMTP_FROM_EMAIL`
 - `SMTP_FROM_NAME`
 - `SMTP_USE_TLS`
+- `SMTP_USE_SSL`
 - `ALLOW_INSECURE_OTP_RESPONSE`
 
 Set this frontend environment variable in Render:

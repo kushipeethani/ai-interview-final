@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
 import httpx
+import logging
 import os
 import json
 import re
@@ -19,6 +20,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 app = FastAPI(title="AI Interview Assistant API")
+logger = logging.getLogger("ai_interview.auth_email")
 
 app.add_middleware(
     CORSMiddleware,
@@ -92,12 +94,16 @@ DEFAULT_INTERVIEWS = []
 
 OTP_EXPIRY_MINUTES = max(int(os.getenv("SIGNUP_OTP_TTL_MINUTES", "10")), 1)
 SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587") or "587")
+try:
+    SMTP_PORT = int(os.getenv("SMTP_PORT", "587") or "587")
+except ValueError:
+    SMTP_PORT = 587
 SMTP_USER = os.getenv("SMTP_USER", "").strip()
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
 SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL", "").strip() or SMTP_USER
 SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME", "AI Interview")
 SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "true").strip().lower() != "false"
+SMTP_USE_SSL = os.getenv("SMTP_USE_SSL", "false").strip().lower() == "true"
 ALLOW_INSECURE_OTP_RESPONSE = os.getenv("ALLOW_INSECURE_OTP_RESPONSE", "false").strip().lower() == "true"
 
 
@@ -190,16 +196,32 @@ def get_password_reset_session(reset_token: str) -> Optional[dict]:
     return record
 
 
+def get_missing_smtp_settings() -> List[str]:
+    missing = []
+    if not SMTP_HOST:
+        missing.append("SMTP_HOST")
+    if not SMTP_USER:
+        missing.append("SMTP_USER")
+    if not SMTP_PASSWORD:
+        missing.append("SMTP_PASSWORD")
+    if not SMTP_FROM_EMAIL:
+        missing.append("SMTP_FROM_EMAIL")
+    return missing
+
+
 def is_smtp_configured() -> bool:
-    return bool(SMTP_HOST and SMTP_FROM_EMAIL)
+    return not get_missing_smtp_settings()
 
 
 def build_otp_config_error() -> HTTPException:
+    missing = get_missing_smtp_settings()
+    missing_text = f" Missing: {', '.join(missing)}." if missing else ""
     return HTTPException(
         status_code=500,
         detail=(
             "OTP email delivery is not configured on the server. "
             "Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, and SMTP_FROM_EMAIL."
+            f"{missing_text}"
         ),
     )
 
@@ -223,17 +245,45 @@ def send_auth_otp_email(recipient_email: str, otp: str, purpose: str) -> None:
     )
 
     try:
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
+        smtp_class = smtplib.SMTP_SSL if SMTP_USE_SSL else smtplib.SMTP
+        with smtp_class(SMTP_HOST, SMTP_PORT, timeout=20) as server:
             server.ehlo()
-            if SMTP_USE_TLS:
+            if SMTP_USE_TLS and not SMTP_USE_SSL:
                 server.starttls(context=ssl.create_default_context())
                 server.ehlo()
-            if SMTP_USER and SMTP_PASSWORD:
-                server.login(SMTP_USER, SMTP_PASSWORD)
+            server.login(SMTP_USER, SMTP_PASSWORD)
             server.send_message(message)
     except HTTPException:
         raise
+    except smtplib.SMTPAuthenticationError as exc:
+        logger.exception("SMTP authentication failed while sending OTP email")
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "SMTP authentication failed. Check SMTP_USER and SMTP_PASSWORD; "
+                "Gmail accounts usually require an app password."
+            ),
+        ) from exc
+    except (smtplib.SMTPRecipientsRefused, smtplib.SMTPSenderRefused) as exc:
+        logger.exception("SMTP sender or recipient was refused while sending OTP email")
+        raise HTTPException(
+            status_code=500,
+            detail="SMTP rejected the sender or recipient email address. Check SMTP_FROM_EMAIL.",
+        ) from exc
+    except (smtplib.SMTPConnectError, smtplib.SMTPServerDisconnected, TimeoutError, OSError) as exc:
+        logger.exception("Could not connect to SMTP server while sending OTP email")
+        raise HTTPException(
+            status_code=500,
+            detail="Could not connect to the SMTP server. Check SMTP_HOST, SMTP_PORT, SMTP_USE_TLS, and SMTP_USE_SSL.",
+        ) from exc
+    except smtplib.SMTPException as exc:
+        logger.exception("SMTP error while sending OTP email")
+        raise HTTPException(
+            status_code=500,
+            detail="The SMTP server rejected the OTP email. Check your SMTP provider settings.",
+        ) from exc
     except Exception as exc:
+        logger.exception("Unexpected error while sending OTP email")
         raise HTTPException(status_code=500, detail="Unable to send OTP email right now") from exc
 
 
